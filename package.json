@@ -6,7 +6,11 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "seed": "node scripts/seedUsers.js",
+    "create-tables": "node scripts/createTables.js",
+    "migrate": "node scripts/runMigration.js",
+    "check-db": "node scripts/checkDatabase.js"
   },
   "repository": {
     "type": "git",
@@ -21,9 +25,17 @@
   },
   "homepage": "https://github.com/muhamedthahir/LnD-Backend#readme",
   "dependencies": {
+    "bcrypt": "^5.1.1",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-session": "^1.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
     "mysql2": "^3.15.3",
-    "nodemon": "^3.1.11"
+    "nodemailer": "^7.0.11",
+    "nodemon": "^3.1.11",
+    "passport": "^0.7.0",
+    "passport-local": "^1.0.0",
+    "xlsx": "^0.18.5"
   }
 }

@@ -16,7 +16,7 @@ const poolOptions = {
   queueLimit: 0
 };
 
-// Optional SSL config
+// Optional SSL configuration
 if (process.env.USE_SSL === 'true') {
   poolOptions.ssl = {
     ca: fs.readFileSync(process.env.SSL_CA_PATH)
@@ -26,5 +26,15 @@ if (process.env.USE_SSL === 'true') {
 }
 
 const pool = mysql.createPool(poolOptions);
+
+// Database connection check
+pool.getConnection()
+  .then(conn => {
+    console.log("MySQL Connected Successfully!");
+    conn.release();
+  })
+  .catch(err => {
+    console.error("MySQL Connection Failed:", err);
+  });
 
 module.exports = pool;
