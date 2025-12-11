@@ -151,7 +151,7 @@ class User {
   }
 
   static async update(id, userData) {
-    const { name, email, role, college_name, roll_number, department, section } = userData;
+    const { name, email, role, college_name, roll_number, department, section, degree } = userData;
     const updates = [];
     const values = [];
     
@@ -162,6 +162,7 @@ class User {
     if (roll_number !== undefined) { updates.push('roll_number = ?'); values.push(roll_number); }
     if (department !== undefined) { updates.push('department = ?'); values.push(department); }
     if (section !== undefined) { updates.push('section = ?'); values.push(section); }
+    if (degree !== undefined) { updates.push('degree = ?'); values.push(degree); }
     
     if (updates.length > 0) {
       values.push(id);
@@ -252,10 +253,8 @@ class User {
       
       // Ensure all expected fields exist and calculate status
       const users = rows.map(row => {
-        let status = 'activated';
-        if (row.role === 'student') {
-          status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
-        }
+        // Check password_set for all users, not just students
+        const status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
         
         return {
           id: row.id,
@@ -310,11 +309,8 @@ class User {
       // Ensure all expected fields exist and calculate status
       return rows.map(row => {
         // Determine status: pending if password not set, activated if password is set
-        let status = 'activated';
-        if (row.role === 'student') {
-          // For students, check if password is set
-          status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
-        }
+        // Apply to all users, not just students
+        const status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
         
         return {
           id: row.id,
@@ -359,10 +355,8 @@ class User {
           `SELECT id, name, email, role, college_name, created_at, password_set, password FROM users ORDER BY created_at DESC LIMIT ${limitInt} OFFSET ${offsetInt}`
         );
         return rows.map(row => {
-          let status = 'activated';
-          if (row.role === 'student') {
-            status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
-          }
+          // Check password_set for all users, not just students
+          const status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
           return {
             ...row,
             roll_number: null,
@@ -397,10 +391,8 @@ class User {
         [role]
       );
       return rows.map(row => {
-        let status = 'activated';
-        if (row.role === 'student') {
-          status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
-        }
+        // Check password_set for all users, not just students
+        const status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
         return {
           id: row.id,
           name: row.name,
@@ -432,10 +424,8 @@ class User {
           [role]
         );
         return rows.map(row => {
-          let status = 'activated';
-          if (row.role === 'student') {
-            status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
-          }
+          // Check password_set for all users, not just students
+          const status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
           return {
             ...row,
             roll_number: null,

@@ -60,6 +60,7 @@ app.use('/api/dashboard', require('./routes/dashboardRoutes'));
 app.use('/api/enrollments', require('./routes/enrollmentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/groups', require('./routes/groupRoutes'));
+app.use('/api/institutions', require('./routes/institutionRoutes'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {

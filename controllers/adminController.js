@@ -229,7 +229,10 @@ class AdminController {
 
   static async getColleges(req, res) {
     try {
-      const colleges = await User.getColleges();
+      // Use institutions instead of getting from users
+      const Institution = require('../models/Institution');
+      const institutions = await Institution.getAll();
+      const colleges = institutions.map(i => i.name);
       res.json({ colleges });
     } catch (error) {
       console.error('Get colleges error:', error);

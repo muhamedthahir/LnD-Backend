@@ -1,6 +1,15 @@
 -- Database Schema for EdTech Backend
 -- Run this SQL script to create all necessary tables
 
+-- Institutions table (colleges)
+CREATE TABLE IF NOT EXISTS institutions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL UNIQUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_name (name)
+);
+
 -- Users table with roles
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
