@@ -197,6 +197,16 @@ class AdminController {
         }
       }
 
+      // Check if this is a college_admin and if they're the last one for their institution
+      if (userToDelete.role === 'college_admin' && userToDelete.college_name) {
+        const collegeAdmins = await User.getCollegeAdminsByCollege(userToDelete.college_name);
+        if (collegeAdmins.length <= 1) {
+          return res.status(400).json({ 
+            error: `Cannot delete the last college admin for "${userToDelete.college_name}". Each institution must have at least one college admin.` 
+          });
+        }
+      }
+
       await User.delete(userId);
       res.json({ message: 'User deleted successfully' });
     } catch (error) {

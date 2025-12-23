@@ -480,6 +480,25 @@ class User {
     );
     return rows.map(row => row.college_name);
   }
+
+  static async getCollegeAdminsByCollege(collegeName) {
+    try {
+      const [rows] = await pool.execute(
+        'SELECT * FROM users WHERE role = ? AND college_name = ?',
+        ['college_admin', collegeName]
+      );
+      return rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        role: row.role,
+        college_name: row.college_name
+      }));
+    } catch (error) {
+      console.error('Error getting college admins by college:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = User;

@@ -221,7 +221,13 @@ class InstitutionController {
   static async getAllInstitutions(req, res) {
     try {
       const institutions = await Institution.getAll();
-      res.json({ institutions: institutions.map(i => i.name) });
+      // Return full institution objects with id and name for dropdown usage
+      res.json({ 
+        institutions: institutions.map(i => ({
+          id: i.id,
+          name: i.name
+        }))
+      });
     } catch (error) {
       console.error('Get all institutions error:', error);
       res.status(500).json({ error: 'Internal server error' });
