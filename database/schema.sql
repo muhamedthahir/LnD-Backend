@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS segments (
   topic_id INT NOT NULL,
   name VARCHAR(255) NOT NULL,
   description TEXT,
-  segment_type ENUM('coding', 'mcq', 'reference_videos', 'articles', 'assessment') NOT NULL,
+  segment_type ENUM('coding', 'mcq', 'reference_videos', 'articles', 'assessment', 'lesson_text', 'lesson_video', 'lesson_audio', 'lesson_document') NOT NULL,
   order_index INT DEFAULT 0,
   content JSON,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

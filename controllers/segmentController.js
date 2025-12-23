@@ -3,7 +3,7 @@ const Concept = require('../models/Concept');
 const InClassPractice = require('../models/InClassPractice');
 const PostClassPractice = require('../models/PostClassPractice');
 
-const VALID_SEGMENT_TYPES = ['coding', 'mcq', 'reference_videos', 'articles', 'assessment'];
+const VALID_SEGMENT_TYPES = ['coding', 'mcq', 'reference_videos', 'articles', 'assessment', 'lesson_text', 'lesson_video', 'lesson_audio', 'lesson_document'];
 
 class SegmentController {
   static async create(req, res) {

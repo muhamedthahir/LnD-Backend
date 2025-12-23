@@ -4,7 +4,15 @@ const Enrollment = require('../models/Enrollment');
 class CourseController {
   static async create(req, res) {
     try {
-      const { name, description } = req.body;
+      const { 
+        name, 
+        category, 
+        competency_level, 
+        short_description, 
+        course_outcomes, 
+        status,
+        thumbnail
+      } = req.body;
       
       if (!name) {
         return res.status(400).json({ error: 'Course name is required' });
@@ -12,7 +20,12 @@ class CourseController {
 
       const courseId = await Course.create({
         name,
-        description: description || '',
+        category,
+        competency_level,
+        short_description,
+        course_outcomes,
+        status: status || 'draft',
+        thumbnail,
         created_by: req.user.id
       });
 
@@ -26,11 +39,29 @@ class CourseController {
 
   static async getAll(req, res) {
     try {
-      const limit = parseInt(req.query.limit) || 50;
-      const offset = parseInt(req.query.offset) || 0;
+      const page = parseInt(req.query.page, 10) || 1;
+      const pageSize = parseInt(req.query.pageSize, 10) || 10;
+      const search = req.query.search || '';
+      const category = req.query.category || '';
+      const status = req.query.status || '';
       
-      const courses = await Course.getAll(limit, offset);
-      res.json(courses);
+      // Ensure valid values
+      const validPage = page > 0 ? page : 1;
+      const validPageSize = pageSize > 0 ? pageSize : 10;
+      
+      const limit = validPageSize;
+      const offset = (validPage - 1) * validPageSize;
+      
+      const courses = await Course.getAll(limit, offset, { search, category, status });
+      const totalCount = await Course.getCount({ search, category, status });
+      
+      res.json({
+        courses,
+        totalCount,
+        page: validPage,
+        pageSize: validPageSize,
+        totalPages: Math.ceil(totalCount / validPageSize)
+      });
     } catch (error) {
       console.error('Get courses error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -56,14 +87,30 @@ class CourseController {
   static async update(req, res) {
     try {
       const { id } = req.params;
-      const { name, description } = req.body;
+      const { 
+        name, 
+        category, 
+        competency_level, 
+        short_description, 
+        course_outcomes, 
+        status,
+        thumbnail
+      } = req.body;
 
       const course = await Course.findById(id);
       if (!course) {
         return res.status(404).json({ error: 'Course not found' });
       }
 
-      await Course.update(id, { name, description });
+      await Course.update(id, { 
+        name, 
+        category, 
+        competency_level, 
+        short_description, 
+        course_outcomes, 
+        status,
+        thumbnail
+      });
       const updatedCourse = await Course.findById(id);
       
       res.json({ message: 'Course updated successfully', course: updatedCourse });

@@ -11,7 +11,7 @@ class Enrollment {
   }
 
   static async findByStudentId(student_id, status = null) {
-    let query = `SELECT e.*, c.name as course_name, c.description as course_description 
+    let query = `SELECT e.*, c.name as course_name, c.short_description as course_description 
        FROM enrollments e 
        JOIN courses c ON e.course_id = c.id 
        WHERE e.student_id = ?`;
