@@ -74,6 +74,8 @@ app.get('/env-test', (req, res) => {
     DB_URL: process.env.DB_URL,
     FRONTEND_URL: process.env.FRONTEND_URL,
     DB_USER: process.env.DB_USER,
+    USE_SSL: process.env.USE_SSL,
+    SSL_CA_PATH: process.env.SSL_CA_PATH,
   });
 });
 // Error handling middleware
