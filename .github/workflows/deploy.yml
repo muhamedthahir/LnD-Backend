@@ -34,8 +34,8 @@ jobs:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           region: ${{ secrets.AWS_REGION }}
-          application_name: my-node-backend
-          environment_name: my-node-backend-env
+          application_name: lnd-backend
+          environment_name: Lnd-backend-env
           platform: "Node.js 20"
           version_label: ${{ github.sha }}
           deployment_package: app.zip
