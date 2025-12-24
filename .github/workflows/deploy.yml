@@ -3,7 +3,7 @@ name: Deploy Node.js 20 to Elastic Beanstalk
 on:
   push:
     branches:
-      - main
+      - develop
 
 jobs:
   deploy:
