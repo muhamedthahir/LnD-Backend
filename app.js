@@ -69,7 +69,13 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.send('Backend is running!');
 });
-
+app.get('/env-test', (req, res) => {
+  res.json({
+    DB_URL: process.env.DB_URL,
+    FRONTEND_URL: process.env.FRONTEND_URL,
+    DB_USER: process.env.DB_USER,
+  });
+});
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
