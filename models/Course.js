@@ -2,10 +2,38 @@ const pool = require('../config/db');
 
 class Course {
   static async create(courseData) {
-    const { name, description, created_by } = courseData;
+    const { 
+      name, 
+      category, 
+      competency_level, 
+      short_description, 
+      course_outcomes, 
+      status,
+      thumbnail,
+      created_by 
+    } = courseData;
+    
     const [result] = await pool.execute(
-      'INSERT INTO courses (name, description, created_by) VALUES (?, ?, ?)',
-      [name, description, created_by]
+      `INSERT INTO courses (
+        name, 
+        category, 
+        competency_level, 
+        short_description, 
+        course_outcomes, 
+        status,
+        thumbnail,
+        created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name, 
+        category, 
+        competency_level, 
+        short_description, 
+        course_outcomes, 
+        status || 'draft',
+        thumbnail || null,
+        created_by
+      ]
     );
     return result.insertId;
   }
@@ -18,19 +46,140 @@ class Course {
     return rows[0];
   }
 
-  static async getAll(limit = 50, offset = 0) {
-    const [rows] = await pool.execute(
-      'SELECT c.*, u.name as creator_name FROM courses c LEFT JOIN users u ON c.created_by = u.id LIMIT ? OFFSET ?',
-      [limit, offset]
-    );
-    return rows;
+  static async getAll(limit = 50, offset = 0, filters = {}) {
+    // Ensure limit and offset are valid integers with defaults
+    // Use != null to check for both null and undefined, but allow 0
+    const limitInt = (limit != null) ? parseInt(limit, 10) : 50;
+    const offsetInt = (offset != null) ? parseInt(offset, 10) : 0;
+    
+    // Validate and set defaults if invalid
+    const finalLimit = (isNaN(limitInt) || limitInt < 1) ? 50 : limitInt;
+    const finalOffset = (isNaN(offsetInt) || offsetInt < 0) ? 0 : offsetInt;
+
+    let query = 'SELECT c.*, u.name as creator_name FROM courses c LEFT JOIN users u ON c.created_by = u.id WHERE 1=1';
+    const params = [];
+
+    if (filters.search) {
+      query += ' AND c.name LIKE ?';
+      params.push(`%${filters.search}%`);
+    }
+
+    // Only filter by category if the column exists (will fail gracefully if column doesn't exist)
+    if (filters.category) {
+      query += ' AND c.category = ?';
+      params.push(filters.category);
+    }
+
+    // Only filter by status if the column exists
+    if (filters.status) {
+      query += ' AND c.status = ?';
+      params.push(filters.status);
+    }
+
+    // MySQL doesn't support placeholders for LIMIT and OFFSET in some versions
+    // Since we've validated these as integers, it's safe to interpolate them
+    query += ` ORDER BY c.created_at DESC LIMIT ${finalLimit} OFFSET ${finalOffset}`;
+
+    try {
+      const [rows] = await pool.execute(query, params);
+      return rows;
+    } catch (error) {
+      // If error is due to missing columns, return all courses without filters
+      if (error.code === 'ER_BAD_FIELD_ERROR') {
+        console.warn('Course table missing some columns, returning all courses without filters');
+        const [rows] = await pool.execute(
+          `SELECT c.*, u.name as creator_name FROM courses c LEFT JOIN users u ON c.created_by = u.id ORDER BY c.created_at DESC LIMIT ${finalLimit} OFFSET ${finalOffset}`
+        );
+        return rows;
+      }
+      throw error;
+    }
+  }
+
+  static async getCount(filters = {}) {
+    let query = 'SELECT COUNT(*) as count FROM courses c WHERE 1=1';
+    const params = [];
+
+    if (filters.search) {
+      query += ' AND c.name LIKE ?';
+      params.push(`%${filters.search}%`);
+    }
+
+    if (filters.category) {
+      query += ' AND c.category = ?';
+      params.push(filters.category);
+    }
+
+    if (filters.status) {
+      query += ' AND c.status = ?';
+      params.push(filters.status);
+    }
+
+    try {
+      const [rows] = await pool.execute(query, params);
+      return rows[0].count;
+    } catch (error) {
+      // If error is due to missing columns, return count without filters
+      if (error.code === 'ER_BAD_FIELD_ERROR') {
+        console.warn('Course table missing some columns, returning total count without filters');
+        const [rows] = await pool.execute('SELECT COUNT(*) as count FROM courses c');
+        return rows[0].count;
+      }
+      throw error;
+    }
   }
 
   static async update(id, courseData) {
-    const { name, description } = courseData;
+    const { 
+      name, 
+      category, 
+      competency_level, 
+      short_description, 
+      course_outcomes, 
+      status,
+      thumbnail
+    } = courseData;
+    
+    const updates = [];
+    const values = [];
+    
+    if (name !== undefined) {
+      updates.push('name = ?');
+      values.push(name);
+    }
+    if (category !== undefined) {
+      updates.push('category = ?');
+      values.push(category);
+    }
+    if (competency_level !== undefined) {
+      updates.push('competency_level = ?');
+      values.push(competency_level);
+    }
+    if (short_description !== undefined) {
+      updates.push('short_description = ?');
+      values.push(short_description);
+    }
+    if (course_outcomes !== undefined) {
+      updates.push('course_outcomes = ?');
+      values.push(course_outcomes);
+    }
+    if (status !== undefined) {
+      updates.push('status = ?');
+      values.push(status);
+    }
+    if (thumbnail !== undefined) {
+      updates.push('thumbnail = ?');
+      values.push(thumbnail);
+    }
+    
+    if (updates.length === 0) {
+      return;
+    }
+    
+    values.push(id);
     await pool.execute(
-      'UPDATE courses SET name = ?, description = ? WHERE id = ?',
-      [name, description, id]
+      `UPDATE courses SET ${updates.join(', ')} WHERE id = ?`,
+      values
     );
   }
 

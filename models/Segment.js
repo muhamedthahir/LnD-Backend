@@ -3,9 +3,11 @@ const pool = require('../config/db');
 class Segment {
   static async create(segmentData) {
     const { topic_id, name, description, segment_type, order_index, content } = segmentData;
+    // Ensure content is properly stringified
+    const contentJson = content ? (typeof content === 'string' ? content : JSON.stringify(content)) : JSON.stringify({});
     const [result] = await pool.execute(
       'INSERT INTO segments (topic_id, name, description, segment_type, order_index, content) VALUES (?, ?, ?, ?, ?, ?)',
-      [topic_id, name, description, segment_type, order_index, JSON.stringify(content)]
+      [topic_id, name, description, segment_type, order_index, contentJson]
     );
     return result.insertId;
   }
@@ -16,7 +18,16 @@ class Segment {
       [id]
     );
     if (rows[0] && rows[0].content) {
-      rows[0].content = JSON.parse(rows[0].content);
+      // Handle both JSON string and already parsed object
+      if (typeof rows[0].content === 'string') {
+        try {
+          rows[0].content = JSON.parse(rows[0].content);
+        } catch (e) {
+          // If parsing fails, keep as string or set to empty object
+          rows[0].content = rows[0].content || {};
+        }
+      }
+      // If it's already an object, use it as is
     }
     return rows[0];
   }
@@ -28,7 +39,16 @@ class Segment {
     );
     return rows.map(row => {
       if (row.content) {
-        row.content = JSON.parse(row.content);
+        // Handle both JSON string and already parsed object
+        if (typeof row.content === 'string') {
+          try {
+            row.content = JSON.parse(row.content);
+          } catch (e) {
+            // If parsing fails, keep as string or set to empty object
+            row.content = row.content || {};
+          }
+        }
+        // If it's already an object, use it as is
       }
       return row;
     });
@@ -36,9 +56,11 @@ class Segment {
 
   static async update(id, segmentData) {
     const { name, description, segment_type, order_index, content } = segmentData;
+    // Ensure content is properly stringified
+    const contentJson = content ? (typeof content === 'string' ? content : JSON.stringify(content)) : JSON.stringify({});
     await pool.execute(
       'UPDATE segments SET name = ?, description = ?, segment_type = ?, order_index = ?, content = ? WHERE id = ?',
-      [name, description, segment_type, order_index, JSON.stringify(content), id]
+      [name, description, segment_type, order_index, contentJson, id]
     );
   }
 
