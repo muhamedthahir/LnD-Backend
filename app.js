@@ -66,6 +66,9 @@ app.use('/api/institutions', require('./routes/institutionRoutes'));
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
 });
+app.get('/', (req, res) => {
+  res.send('Backend is running!');
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
