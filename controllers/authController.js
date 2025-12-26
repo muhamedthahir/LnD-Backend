@@ -232,6 +232,42 @@ class AuthController {
     }
   }
 
+  static async refreshToken(req, res) {
+    try {
+      const { refreshToken: token } = req.body;
+
+      if (!token) {
+        return res.status(400).json({ error: 'Refresh token is required' });
+      }
+
+      // Find refresh token in database
+      const storedToken = await RefreshToken.findByToken(token);
+      
+      if (!storedToken) {
+        return res.status(401).json({ error: 'Invalid or expired refresh token' });
+      }
+
+      // Get user associated with refresh token
+      const user = await User.findById(storedToken.user_id);
+      
+      if (!user) {
+        // User doesn't exist, revoke token
+        await RefreshToken.revoke(token);
+        return res.status(401).json({ error: 'User not found' });
+      }
+
+      // Generate new access token
+      const accessToken = generateAccessToken(user);
+
+      return res.json({
+        accessToken: accessToken
+      });
+    } catch (error) {
+      console.error('Refresh token error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
   static async checkAuth(req, res) {
     // Set cache-control headers to prevent 304 responses
     res.set({

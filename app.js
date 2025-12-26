@@ -15,19 +15,31 @@ app.use((req, res, next) => {
     process.env.FRONTEND_URL
   ].filter(Boolean); // Remove undefined values
   
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  } else if (origin && (origin.includes('localhost:5173') || origin.includes('cloudfront.net'))) {
-    // Explicitly allow localhost:5173 and cloudfront domains
+  // Determine if origin should be allowed
+  let shouldAllowOrigin = false;
+  if (origin) {
+    if (allowedOrigins.includes(origin)) {
+      shouldAllowOrigin = true;
+    } else if (origin.includes('localhost:5173') || origin.includes('cloudfront.net')) {
+      // Explicitly allow localhost:5173 and any cloudfront domains
+      shouldAllowOrigin = true;
+    }
+  }
+  
+  // Always set CORS headers (browser requires them for preflight)
+  if (shouldAllowOrigin && origin) {
     res.header('Access-Control-Allow-Origin', origin);
   }
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  res.header('Access-Control-Max-Age', '86400'); // 24 hours
   
+  // Handle preflight OPTIONS request - must return 200 with headers
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
+    return res.status(200).json({});
   }
+  
   next();
 });
 
