@@ -77,15 +77,24 @@ class AuthController {
           return res.status(500).json({ error: 'Internal server error', details: err.message });
         }
 
+        // Set cache-control headers to prevent 304 responses
+        res.set({
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        });
+
         // Save session explicitly
         req.session.save((saveErr) => {
           if (saveErr) {
             console.error('Session save error:', saveErr);
+            return res.status(500).json({ error: 'Failed to save session', details: saveErr.message });
           }
           
           console.log('User logged in successfully. Session ID:', req.sessionID);
           console.log('Session passport:', req.session.passport);
           console.log('Is authenticated:', req.isAuthenticated());
+          console.log('Cookie will be set with secure:', process.env.NODE_ENV === 'production' || process.env.FRONTEND_URL?.includes('https://'));
 
           // Return user data
           return res.json({
@@ -192,12 +201,20 @@ class AuthController {
   }
 
   static async checkAuth(req, res) {
+    // Set cache-control headers to prevent 304 responses
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    
     // Check if user is authenticated via Passport
     console.log('CheckAuth - isAuthenticated:', req.isAuthenticated());
     console.log('CheckAuth - user:', req.user);
     console.log('CheckAuth - session:', req.session);
+    console.log('CheckAuth - session ID:', req.sessionID);
     
-    // if (req.isAuthenticated() && req.user) {
+    if (req.isAuthenticated() && req.user) {
       return res.json({
         authenticated: true,
         user: {
@@ -211,10 +228,9 @@ class AuthController {
           section: req.user.section || null
         }
       });
-    //} 
-    // else {
-    //  return res.json({ authenticated: false });
-    //}
+    } else {
+      return res.json({ authenticated: false });
+    }
   }
 }
 
