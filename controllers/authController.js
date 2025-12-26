@@ -91,12 +91,18 @@ class AuthController {
             return res.status(500).json({ error: 'Failed to save session', details: saveErr.message });
           }
           
+          const isProduction = process.env.NODE_ENV === 'production' || 
+                               process.env.FRONTEND_URL?.includes('https://') ||
+                               process.env.FRONTEND_URL?.includes('cloudfront.net');
+          
           console.log('User logged in successfully. Session ID:', req.sessionID);
           console.log('Session passport:', req.session.passport);
           console.log('Is authenticated:', req.isAuthenticated());
-          console.log('Cookie will be set with secure:', process.env.NODE_ENV === 'production' || process.env.FRONTEND_URL?.includes('https://'));
+          console.log('Cookie settings - secure:', isProduction, 'sameSite:', isProduction ? 'none' : 'lax');
+          console.log('Set-Cookie header will be sent with response');
 
           // Return user data
+          // The session cookie is automatically set by express-session middleware
           return res.json({
             message: 'Login successful',
             user: {
