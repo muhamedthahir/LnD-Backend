@@ -10,12 +10,17 @@ const app = express();
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowedOrigins = [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
+    'http://localhost:5173',
     'http://localhost:5174',
-    'http://localhost:3000'
-  ];
+    'http://localhost:3000',
+    'https://dnv2vd007hcre.cloudfront.net',
+    process.env.FRONTEND_URL
+  ].filter(Boolean); // Remove undefined values
   
-  if (allowedOrigins.includes(origin)) {
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  } else if (origin && (origin.includes('localhost:5173') || origin.includes('cloudfront.net'))) {
+    // Explicitly allow localhost:5173 and cloudfront domains
     res.header('Access-Control-Allow-Origin', origin);
   }
   res.header('Access-Control-Allow-Credentials', 'true');
@@ -33,16 +38,22 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Session configuration
+// Determine if we're in production (HTTPS) or development (HTTP)
+const isProduction = process.env.NODE_ENV === 'production' || 
+                     process.env.FRONTEND_URL?.includes('https://') ||
+                     process.env.FRONTEND_URL?.includes('cloudfront.net');
+
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
   resave: true, // Changed to true to ensure session is saved
   saveUninitialized: true, // Changed to true to save new sessions
   cookie: {
-    secure: false, // Set to false for localhost development
+    secure: isProduction, // true for HTTPS (production), false for HTTP (localhost)
     httpOnly: true,
-    sameSite: 'lax', // Allow cross-site requests in development
+    sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin HTTPS, 'lax' for same-origin HTTP
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    path: '/' // Ensure cookie is available for all paths
+    path: '/', // Ensure cookie is available for all paths
+    domain: isProduction ? undefined : undefined // Let browser set domain automatically
   },
   name: 'sessionId' // Custom session name
 }));

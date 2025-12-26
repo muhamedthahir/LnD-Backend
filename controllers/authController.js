@@ -147,7 +147,15 @@ class AuthController {
         if (err) {
           return res.status(500).json({ error: 'Error destroying session' });
         }
-        res.clearCookie('connect.sid');
+        // Clear cookie with correct name and settings
+        const isProduction = process.env.NODE_ENV === 'production' || 
+                           process.env.FRONTEND_URL?.includes('https://');
+        res.clearCookie('sessionId', {
+          httpOnly: true,
+          secure: isProduction,
+          sameSite: isProduction ? 'none' : 'lax',
+          path: '/'
+        });
         res.json({ message: 'Logout successful' });
       });
     });
