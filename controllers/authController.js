@@ -209,10 +209,22 @@ class AuthController {
     });
     
     // Check if user is authenticated via Passport
-    console.log('CheckAuth - isAuthenticated:', req.isAuthenticated());
-    console.log('CheckAuth - user:', req.user);
-    console.log('CheckAuth - session:', req.session);
-    console.log('CheckAuth - session ID:', req.sessionID);
+    const hasSession = !!req.session;
+    const hasSessionId = !!req.sessionID;
+    const hasPassportInSession = !!(req.session && req.session.passport);
+    const isAuthenticated = req.isAuthenticated();
+    const hasUser = !!req.user;
+    
+    console.log('CheckAuth - Request details:');
+    console.log('  - Session exists:', hasSession);
+    console.log('  - Session ID:', req.sessionID);
+    console.log('  - Has passport in session:', hasPassportInSession);
+    console.log('  - isAuthenticated():', isAuthenticated);
+    console.log('  - req.user:', req.user ? { id: req.user.id, email: req.user.email } : null);
+    console.log('  - Cookies received:', req.headers.cookie ? 'Yes' : 'No');
+    if (req.headers.cookie) {
+      console.log('  - Cookie header:', req.headers.cookie.substring(0, 100) + '...');
+    }
     
     if (req.isAuthenticated() && req.user) {
       return res.json({
@@ -229,6 +241,17 @@ class AuthController {
         }
       });
     } else {
+      // Log why authentication failed for debugging
+      if (!hasSession) {
+        console.log('  - Auth failed: No session exists');
+      } else if (!hasPassportInSession) {
+        console.log('  - Auth failed: No passport data in session');
+      } else if (!isAuthenticated) {
+        console.log('  - Auth failed: isAuthenticated() returned false');
+      } else if (!hasUser) {
+        console.log('  - Auth failed: req.user is null');
+      }
+      
       return res.json({ authenticated: false });
     }
   }
