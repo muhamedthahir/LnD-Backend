@@ -197,7 +197,7 @@ class AuthController {
     console.log('CheckAuth - user:', req.user);
     console.log('CheckAuth - session:', req.session);
     
-    if (req.isAuthenticated() && req.user) {
+    // if (req.isAuthenticated() && req.user) {
       return res.json({
         authenticated: true,
         user: {
@@ -211,9 +211,10 @@ class AuthController {
           section: req.user.section || null
         }
       });
-    } else {
-      return res.json({ authenticated: false });
-    }
+    //} 
+    // else {
+    //  return res.json({ authenticated: false });
+    //}
   }
 }
 
