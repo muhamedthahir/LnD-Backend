@@ -1,8 +1,6 @@
 // app.js
 const express = require('express');
-const session = require('express-session');
 require('./config/db.js'); // Initialize database connection
-const passport = require('./config/passport');
 
 const app = express();   
 
@@ -36,31 +34,6 @@ app.use((req, res, next) => {
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Session configuration
-// Determine if we're in production (HTTPS) or development (HTTP)
-const isProduction = process.env.NODE_ENV === 'production' || 
-                     process.env.FRONTEND_URL?.includes('https://') ||
-                     process.env.FRONTEND_URL?.includes('cloudfront.net');
-
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
-  resave: true, // Changed to true to ensure session is saved
-  saveUninitialized: true, // Changed to true to save new sessions
-  cookie: {
-    secure: isProduction, // true for HTTPS (production), false for HTTP (localhost)
-    httpOnly: true,
-    sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin HTTPS, 'lax' for same-origin HTTP
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    path: '/', // Ensure cookie is available for all paths
-    domain: isProduction ? undefined : undefined // Let browser set domain automatically
-  },
-  name: 'sessionId' // Custom session name
-}));
-
-// Initialize Passport.js
-app.use(passport.initialize());
-app.use(passport.session());
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));

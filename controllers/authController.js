@@ -1,6 +1,7 @@
 const User = require('../models/User');
+const RefreshToken = require('../models/RefreshToken');
 const bcrypt = require('bcrypt');
-const passport = require('passport');
+const { generateTokens, generateAccessToken, verifyAccessToken, extractToken } = require('../utils/jwt');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmail } = require('../utils/emailService');
 
@@ -50,75 +51,102 @@ class AuthController {
     }
   }
 
-  static async login(req, res, next) {
-    // Use Passport.js authentication
-    passport.authenticate('local', async (err, user, info) => {
-      if (err) {
-        console.error('Passport authentication error:', err);
-        return res.status(500).json({ error: 'Internal server error', details: err.message });
+  static async login(req, res) {
+    try {
+      const { email, password, rememberMe } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
       }
+
+      // Find user by email
+      const user = await User.findByEmail(email);
       
       if (!user) {
-        // Check if OTP was verified and password setup is required
-        if (info?.requiresPasswordSetup) {
-          return res.json({
-            requiresPasswordSetup: true,
-            userId: info.userId,
-            message: 'OTP verified. Please set your password.'
-          });
-        }
-        return res.status(401).json({ error: info?.message || 'Invalid credentials' });
+        return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-      // Log user in (create session)
-      req.logIn(user, (err) => {
-        if (err) {
-          console.error('Login session error:', err);
-          return res.status(500).json({ error: 'Internal server error', details: err.message });
-        }
-
-        // Set cache-control headers to prevent 304 responses
-        res.set({
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        });
-
-        // Save session explicitly
-        req.session.save((saveErr) => {
-          if (saveErr) {
-            console.error('Session save error:', saveErr);
-            return res.status(500).json({ error: 'Failed to save session', details: saveErr.message });
-          }
-          
-          const isProduction = process.env.NODE_ENV === 'production' || 
-                               process.env.FRONTEND_URL?.includes('https://') ||
-                               process.env.FRONTEND_URL?.includes('cloudfront.net');
-          
-          console.log('User logged in successfully. Session ID:', req.sessionID);
-          console.log('Session passport:', req.session.passport);
-          console.log('Is authenticated:', req.isAuthenticated());
-          console.log('Cookie settings - secure:', isProduction, 'sameSite:', isProduction ? 'none' : 'lax');
-          console.log('Set-Cookie header will be sent with response');
-
-          // Return user data
-          // The session cookie is automatically set by express-session middleware
+      // Check if user is trying to login with OTP (only if OTP columns exist)
+      if (user.otp !== undefined && !user.password && user.otp) {
+        // User is logging in with OTP - check if OTP matches
+        if (password === user.otp) {
+          // OTP is correct, but password not set yet
           return res.json({
-            message: 'Login successful',
-            user: {
-              id: user.id,
-              name: user.name,
-              email: user.email,
-              role: user.role,
-              college_name: user.college_name || null,
-              roll_number: user.roll_number || null,
-              department: user.department || null,
-              section: user.section || null
-            }
+            requiresPasswordSetup: true,
+            userId: user.id,
+            message: 'OTP verified. Please set your password.'
           });
+        } else {
+          return res.status(401).json({ error: 'Invalid OTP' });
+        }
+      }
+
+      // Check if password is set
+      if (!user.password) {
+        return res.status(401).json({ error: 'Please set your password first using the OTP sent to your email' });
+      }
+
+      // Check password
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      
+      if (!isValidPassword) {
+        return res.status(401).json({ error: 'Invalid email or password' });
+      }
+
+      // Generate access and refresh tokens
+      const { accessToken, refreshToken, refreshTokenExpiration } = generateTokens(user, rememberMe === true);
+
+      // Store refresh token in database
+      try {
+        await RefreshToken.create({
+          userId: user.id,
+          token: refreshToken,
+          expiresAt: refreshTokenExpiration
         });
+      } catch (error) {
+        console.error('Error storing refresh token:', error);
+        // If table doesn't exist, create it and retry
+        if (error.code === 'ER_NO_SUCH_TABLE') {
+          await RefreshToken.createTable();
+          await RefreshToken.create({
+            userId: user.id,
+            token: refreshToken,
+            expiresAt: refreshTokenExpiration
+          });
+        } else {
+          throw error;
+        }
+      }
+
+      // Set cache-control headers to prevent 304 responses
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
       });
-    })(req, res, next);
+
+      console.log('User logged in successfully. User ID:', user.id, 'Remember Me:', rememberMe);
+
+      // Return user data and tokens
+      return res.json({
+        message: 'Login successful',
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          college_name: user.college_name || null,
+          roll_number: user.roll_number || null,
+          department: user.department || null,
+          section: user.section || null
+        }
+      });
+    } catch (error) {
+      console.error('Login error:', error);
+      return res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
   }
 
   static async setPassword(req, res) {
@@ -154,31 +182,29 @@ class AuthController {
   }
 
   static async logout(req, res) {
-    req.logout((err) => {
-      if (err) {
-        return res.status(500).json({ error: 'Error logging out' });
+    try {
+      const { refreshToken: token } = req.body;
+      
+      // Revoke refresh token if provided
+      if (token) {
+        await RefreshToken.revoke(token);
       }
-      req.session.destroy((err) => {
-        if (err) {
-          return res.status(500).json({ error: 'Error destroying session' });
-        }
-        // Clear cookie with correct name and settings
-        const isProduction = process.env.NODE_ENV === 'production' || 
-                           process.env.FRONTEND_URL?.includes('https://');
-        res.clearCookie('sessionId', {
-          httpOnly: true,
-          secure: isProduction,
-          sameSite: isProduction ? 'none' : 'lax',
-          path: '/'
-        });
-        res.json({ message: 'Logout successful' });
-      });
-    });
+      
+      // If user is authenticated, revoke all their refresh tokens
+      if (req.user) {
+        await RefreshToken.revokeAllForUser(req.user.id);
+      }
+      
+      res.json({ message: 'Logout successful' });
+    } catch (error) {
+      console.error('Logout error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
   }
 
   static async getProfile(req, res) {
     try {
-      // User is available from Passport.js session
+      // User is available from JWT middleware
       if (!req.user) {
         return res.status(401).json({ error: 'Not authenticated' });
       }
@@ -214,50 +240,42 @@ class AuthController {
       'Expires': '0'
     });
     
-    // Check if user is authenticated via Passport
-    const hasSession = !!req.session;
-    const hasSessionId = !!req.sessionID;
-    const hasPassportInSession = !!(req.session && req.session.passport);
-    const isAuthenticated = req.isAuthenticated();
-    const hasUser = !!req.user;
+    // Extract and verify JWT token
+    const token = extractToken(req);
     
-    console.log('CheckAuth - Request details:');
-    console.log('  - Session exists:', hasSession);
-    console.log('  - Session ID:', req.sessionID);
-    console.log('  - Has passport in session:', hasPassportInSession);
-    console.log('  - isAuthenticated():', isAuthenticated);
-    console.log('  - req.user:', req.user ? { id: req.user.id, email: req.user.email } : null);
-    console.log('  - Cookies received:', req.headers.cookie ? 'Yes' : 'No');
-    if (req.headers.cookie) {
-      console.log('  - Cookie header:', req.headers.cookie.substring(0, 100) + '...');
+    if (!token) {
+      return res.json({ authenticated: false });
     }
+
+    const decoded = verifyAccessToken(token);
     
-    if (req.isAuthenticated() && req.user) {
+    if (!decoded) {
+      return res.json({ authenticated: false });
+    }
+
+    // Verify user still exists in database
+    try {
+      const user = await User.findById(decoded.id);
+      
+      if (!user) {
+        return res.json({ authenticated: false });
+      }
+
       return res.json({
         authenticated: true,
         user: {
-          id: req.user.id,
-          name: req.user.name,
-          email: req.user.email,
-          role: req.user.role,
-          college_name: req.user.college_name || null,
-          roll_number: req.user.roll_number || null,
-          department: req.user.department || null,
-          section: req.user.section || null
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          college_name: user.college_name || null,
+          roll_number: user.roll_number || null,
+          department: user.department || null,
+          section: user.section || null
         }
       });
-    } else {
-      // Log why authentication failed for debugging
-      if (!hasSession) {
-        console.log('  - Auth failed: No session exists');
-      } else if (!hasPassportInSession) {
-        console.log('  - Auth failed: No passport data in session');
-      } else if (!isAuthenticated) {
-        console.log('  - Auth failed: isAuthenticated() returned false');
-      } else if (!hasUser) {
-        console.log('  - Auth failed: req.user is null');
-      }
-      
+    } catch (error) {
+      console.error('CheckAuth error:', error);
       return res.json({ authenticated: false });
     }
   }
