@@ -21,14 +21,8 @@ const executeCode = async (req, res) => {
     const pistonPort = process.env.PISTON_PORT || '2000';
     const pistonEndpoint = `${pistonUrl}:${pistonPort}/api/v2/execute`;
 
-    // Map frontend language names to Piston language names
-    const languageMapping = {
-      'javascript': 'node',  // Piston uses 'node' for JavaScript
-      'js': 'node'
-    };
-
-    // Get the Piston-compatible language name
-    const pistonLanguage = languageMapping[language.toLowerCase()] || language.toLowerCase();
+    // Use language as-is (no conversion)
+    const pistonLanguage = language.toLowerCase();
 
     // Language version mapping (default versions for common languages)
     const languageVersions = {
