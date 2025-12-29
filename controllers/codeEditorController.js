@@ -21,8 +21,18 @@ const executeCode = async (req, res) => {
     const pistonPort = process.env.PISTON_PORT || '2000';
     const pistonEndpoint = `${pistonUrl}:${pistonPort}/api/v2/execute`;
 
+    // Map frontend language names to Piston language names
+    const languageMapping = {
+      'javascript': 'node',  // Piston uses 'node' for JavaScript
+      'js': 'node'
+    };
+
+    // Get the Piston-compatible language name
+    const pistonLanguage = languageMapping[language.toLowerCase()] || language.toLowerCase();
+
     // Language version mapping (default versions for common languages)
     const languageVersions = {
+      'node': version || '18.15.0',
       'javascript': version || '18.15.0',
       'python': version || '3.10.0',
       'java': version || '15.0.2',
@@ -41,8 +51,8 @@ const executeCode = async (req, res) => {
 
     // Prepare the request payload for Piston API
     const pistonPayload = {
-      language: language.toLowerCase(),
-      version: languageVersions[language.toLowerCase()] || version || '*',
+      language: pistonLanguage,
+      version: languageVersions[pistonLanguage] || languageVersions[language.toLowerCase()] || version || '*',
       files: [
         {
           name: getFileName(language),
@@ -52,7 +62,7 @@ const executeCode = async (req, res) => {
       stdin: stdin,
       args: [],
       compile_timeout: 10000,
-      run_timeout: 5000,
+      run_timeout: 10000,
       compile_memory_limit: -1,
       run_memory_limit: -1
     };
