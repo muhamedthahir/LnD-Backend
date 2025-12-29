@@ -1,4 +1,6 @@
-const pool = require('../config/db');
+const db = require('../config/db');
+const pool = db;
+const executeWithRetry = db.executeWithRetry || pool.execute;
 
 class RefreshToken {
   /**
@@ -36,13 +38,19 @@ class RefreshToken {
    */
   static async findByToken(token) {
     try {
-      const [rows] = await pool.execute(
+      const [rows] = await executeWithRetry(
         'SELECT * FROM refresh_tokens WHERE token = ? AND expires_at > NOW() AND revoked = FALSE',
         [token]
       );
       return rows[0] || null;
     } catch (error) {
       if (error.code === 'ER_NO_SUCH_TABLE') {
+        return null;
+      }
+      // Log connection errors but don't throw for ECONNRESET - let it retry
+      if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.error('RefreshToken.findByToken connection error:', error.message);
+        // Return null to allow the auth flow to continue (user will need to re-login)
         return null;
       }
       throw error;

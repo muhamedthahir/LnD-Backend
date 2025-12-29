@@ -2,19 +2,48 @@ const pool = require('../config/db');
 
 class Enrollment {
   static async create(enrollmentData) {
-    const { student_id, course_id, status } = enrollmentData;
-    const [result] = await pool.execute(
-      'INSERT INTO enrollments (student_id, course_id, status) VALUES (?, ?, ?)',
-      [student_id, course_id, status || 'invited']
-    );
-    return result.insertId;
+    const { student_id, course_id, administration_id, user_id, status } = enrollmentData;
+    // Support both old format (student_id, course_id) and new format (user_id, administration_id)
+    const userId = user_id || student_id;
+    const adminId = administration_id;
+    const courseId = course_id;
+    
+    if (adminId) {
+      // New format: enrollment for administration
+      // Use student_id for backward compatibility with existing foreign key constraint
+      const [result] = await pool.execute(
+        'INSERT INTO enrollments (student_id, administration_id, status) VALUES (?, ?, ?)',
+        [userId, adminId, status || 'invited']
+      );
+      return result.insertId;
+    } else if (courseId) {
+      // Old format: enrollment for course
+      const [result] = await pool.execute(
+        'INSERT INTO enrollments (student_id, course_id, status) VALUES (?, ?, ?)',
+        [userId, courseId, status || 'invited']
+      );
+      return result.insertId;
+    } else {
+      throw new Error('Either course_id or administration_id must be provided');
+    }
   }
 
   static async findByStudentId(student_id, status = null) {
-    let query = `SELECT e.*, c.name as course_name, c.short_description as course_description 
-       FROM enrollments e 
-       JOIN courses c ON e.course_id = c.id 
-       WHERE e.student_id = ?`;
+    // Handle both course_id enrollments and administration_id enrollments
+    let query = `SELECT 
+      e.*,
+      COALESCE(c.id, ca.course_id) as course_id,
+      COALESCE(c.name, c2.name) as course_name,
+      COALESCE(c.short_description, c2.short_description) as course_description,
+      COALESCE(c.category, c2.category) as category,
+      COALESCE(c.competency_level, c2.competency_level) as competency_level,
+      COALESCE(c.status, c2.status) as course_status,
+      COALESCE(c.thumbnail, c2.thumbnail) as thumbnail
+    FROM enrollments e
+    LEFT JOIN courses c ON e.course_id = c.id
+    LEFT JOIN course_administrations ca ON e.administration_id = ca.id
+    LEFT JOIN courses c2 ON ca.course_id = c2.id
+    WHERE e.student_id = ? AND (e.course_id IS NOT NULL OR e.administration_id IS NOT NULL)`;
     const params = [student_id];
     
     if (status) {
@@ -52,6 +81,31 @@ class Enrollment {
       [student_id, course_id]
     );
     return rows[0];
+  }
+
+  /**
+   * Check if a user is already enrolled in a course through any administration or direct enrollment
+   * @param {number} student_id - The student/user ID
+   * @param {number} course_id - The course ID
+   * @returns {Object|null} - The existing enrollment if found, null otherwise
+   */
+  static async checkCourseEnrollment(student_id, course_id) {
+    // Check direct course enrollment
+    const directEnrollment = await this.checkEnrollment(student_id, course_id);
+    if (directEnrollment) {
+      return directEnrollment;
+    }
+
+    // Check enrollment through any administration for this course
+    const [rows] = await pool.execute(
+      `SELECT e.* 
+       FROM enrollments e
+       INNER JOIN course_administrations ca ON e.administration_id = ca.id
+       WHERE e.student_id = ? AND ca.course_id = ?`,
+      [student_id, course_id]
+    );
+    
+    return rows[0] || null;
   }
 
   static async delete(student_id, course_id) {

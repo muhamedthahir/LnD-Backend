@@ -65,7 +65,9 @@ class User {
   static async findByEmail(email) {
     try {
       // Try to select all columns, but handle missing columns gracefully
-      const [rows] = await pool.execute(
+      const db = require('../config/db');
+      const executeWithRetry = db.executeWithRetry || pool.execute;
+      const [rows] = await executeWithRetry(
         'SELECT * FROM users WHERE email = ?',
         [email]
       );
@@ -83,10 +85,40 @@ class User {
       }
       return null;
     } catch (error) {
+      // Handle connection reset errors
+      if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.error('User.findByEmail connection error:', error.message);
+        // Retry once with a fresh connection
+        try {
+          const db = require('../config/db');
+          const executeWithRetry = db.executeWithRetry || pool.execute;
+          const [rows] = await executeWithRetry(
+            'SELECT * FROM users WHERE email = ?',
+            [email]
+          );
+          if (rows[0]) {
+            return {
+              ...rows[0],
+              roll_number: rows[0].roll_number || null,
+              department: rows[0].department || null,
+              section: rows[0].section || '1',
+              otp: rows[0].otp || null,
+              otp_expires_at: rows[0].otp_expires_at || null,
+              password_set: rows[0].password_set || false
+            };
+          }
+          return null;
+        } catch (retryError) {
+          console.error('User.findByEmail retry failed:', retryError.message);
+          throw retryError;
+        }
+      }
       // If error is about missing columns, try a simpler query
       if (error.code === 'ER_BAD_FIELD_ERROR') {
         console.warn('Some columns missing, using basic query. Please run migration.');
-        const [rows] = await pool.execute(
+        const db = require('../config/db');
+        const executeWithRetry = db.executeWithRetry || pool.execute;
+        const [rows] = await executeWithRetry(
           'SELECT id, name, email, password, role, college_name, created_at FROM users WHERE email = ?',
           [email]
         );

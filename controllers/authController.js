@@ -60,7 +60,18 @@ class AuthController {
       }
 
       // Find user by email
-      const user = await User.findByEmail(email);
+      let user;
+      try {
+        user = await User.findByEmail(email);
+      } catch (error) {
+        // Handle database connection errors
+        if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+          console.error('Login error: Database connection issue:', error.message);
+          return res.status(503).json({ error: 'Database connection error. Please try again.' });
+        }
+        console.error('Login error:', error);
+        throw error;
+      }
       
       if (!user) {
         return res.status(401).json({ error: 'Invalid email or password' });
@@ -241,7 +252,18 @@ class AuthController {
       }
 
       // Find refresh token in database
-      const storedToken = await RefreshToken.findByToken(token);
+      let storedToken;
+      try {
+        storedToken = await RefreshToken.findByToken(token);
+      } catch (error) {
+        // Handle database connection errors
+        if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+          console.error('Refresh token error: Database connection issue:', error.message);
+          return res.status(503).json({ error: 'Database connection error. Please try again.' });
+        }
+        console.error('Refresh token error:', error);
+        throw error;
+      }
       
       if (!storedToken) {
         return res.status(401).json({ error: 'Invalid or expired refresh token' });

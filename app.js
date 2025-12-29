@@ -2,6 +2,12 @@
 const express = require('express');
 require('./config/db.js'); // Initialize database connection
 
+// Initialize database tables
+const CourseAdministration = require('./models/CourseAdministration');
+CourseAdministration.createTable().catch(err => {
+  console.error('Error creating course administrations table:', err);
+});
+
 const app = express();   
 
 // CORS middleware - MUST be before other middleware
@@ -57,6 +63,7 @@ app.use('/api/enrollments', require('./routes/enrollmentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/groups', require('./routes/groupRoutes'));
 app.use('/api/institutions', require('./routes/institutionRoutes'));
+app.use('/api/administrations', require('./routes/administrationRoutes'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {

@@ -1,0 +1,15 @@
+const express = require('express');
+const router = express.Router();
+const AdministrationController = require('../controllers/administrationController');
+const { authenticate, authorize } = require('../middleware/auth');
+
+// All routes require authentication and admin authorization
+router.post('/', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.create);
+router.get('/', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getAll);
+router.get('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getById);
+router.put('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.update);
+router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.delete);
+router.post('/draft', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.saveAsDraft);
+
+module.exports = router;
+
