@@ -166,3 +166,42 @@ CREATE TABLE IF NOT EXISTS group_members (
   INDEX idx_user_id (user_id)
 );
 
+-- User Courses table (Track individual user-course progress)
+CREATE TABLE IF NOT EXISTS user_courses (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  course_id INT NOT NULL,
+  enrollment_id INT NULL,
+  status ENUM('in_progress', 'completed', 'paused', 'not_started') NOT NULL DEFAULT 'not_started',
+  progress_percentage INT DEFAULT 0,
+  last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  started_at TIMESTAMP NULL,
+  completed_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (enrollment_id) REFERENCES enrollments(id) ON DELETE SET NULL,
+  UNIQUE KEY unique_user_course (user_id, course_id),
+  INDEX idx_user_id (user_id),
+  INDEX idx_course_id (course_id),
+  INDEX idx_status (status),
+  INDEX idx_last_accessed (last_accessed_at)
+);
+
+-- User Course Segments table (Track completed segments)
+CREATE TABLE IF NOT EXISTS user_course_segments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  course_id INT NOT NULL,
+  segment_id INT NOT NULL,
+  completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (segment_id) REFERENCES segments(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_user_segment (user_id, course_id, segment_id),
+  INDEX idx_user_course (user_id, course_id),
+  INDEX idx_segment_id (segment_id)
+);
+

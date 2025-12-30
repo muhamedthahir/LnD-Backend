@@ -38,7 +38,9 @@ class Enrollment {
       COALESCE(c.category, c2.category) as category,
       COALESCE(c.competency_level, c2.competency_level) as competency_level,
       COALESCE(c.status, c2.status) as course_status,
-      COALESCE(c.thumbnail, c2.thumbnail) as thumbnail
+      COALESCE(c.thumbnail, c2.thumbnail) as thumbnail,
+      ca.start_date,
+      ca.end_date
     FROM enrollments e
     LEFT JOIN courses c ON e.course_id = c.id
     LEFT JOIN course_administrations ca ON e.administration_id = ca.id

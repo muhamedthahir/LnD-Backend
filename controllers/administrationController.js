@@ -54,6 +54,30 @@ class AdministrationController {
 
       // Handle enrollments (page 2 data)
       let invitesSent = false;
+      const collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+      
+      // Update users' college_name to match the selected college when enrollments are created
+      // This ensures the college name is correctly reflected in the administration table
+      if (collegeName && collegeName.trim() !== '') {
+        if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
+          // Get all users from selected groups and update their college_name
+          for (const groupId of selectedGroups) {
+            const members = await Group.getMembers(groupId);
+            if (members && members.length > 0) {
+              for (const member of members) {
+                // Update user's college_name to match the selected college
+                await User.update(member.id, { college_name: collegeName });
+              }
+            }
+          }
+        } else if (candidateType === 'individual' && individualUsers && individualUsers.length > 0) {
+          // Update individual users' college_name to match the selected college
+          for (const user of individualUsers) {
+            await User.update(user.id, { college_name: collegeName });
+          }
+        }
+      }
+      
       if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
         // Get all users from selected groups
         for (const groupId of selectedGroups) {
@@ -207,6 +231,30 @@ class AdministrationController {
 
       // Handle enrollments if provided (from page 2)
       let invitesSent = false;
+      const collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+      
+      // Update users' college_name to match the selected college when enrollments are created
+      // This ensures the college name is correctly reflected in the administration table
+      if (collegeName && collegeName.trim() !== '') {
+        if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
+          // Get all users from selected groups and update their college_name
+          for (const groupId of selectedGroups) {
+            const members = await Group.getMembers(groupId);
+            if (members && members.length > 0) {
+              for (const member of members) {
+                // Update user's college_name to match the selected college
+                await User.update(member.id, { college_name: collegeName });
+              }
+            }
+          }
+        } else if (candidateType === 'individual' && individualUsers && individualUsers.length > 0) {
+          // Update individual users' college_name to match the selected college
+          for (const user of individualUsers) {
+            await User.update(user.id, { college_name: collegeName });
+          }
+        }
+      }
+      
       if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
         // Get all users from selected groups
         for (const groupId of selectedGroups) {

@@ -8,6 +8,11 @@ CourseAdministration.createTable().catch(err => {
   console.error('Error creating course administrations table:', err);
 });
 
+const UserCourse = require('./models/UserCourse');
+UserCourse.createTable().catch(err => {
+  console.error('Error creating user courses table:', err);
+});
+
 const app = express();   
 
 // CORS middleware - MUST be before other middleware
@@ -66,6 +71,7 @@ app.use('/api/institutions', require('./routes/institutionRoutes'));
 app.use('/api/administrations', require('./routes/administrationRoutes'));
 app.use('/api/codeExecute', require('./routes/codeEditorRoutes'));
 app.use('/api/upload', require('./routes/uploadRoutes'));
+app.use('/api/user-courses', require('./routes/userCourseRoutes'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
