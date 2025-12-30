@@ -55,8 +55,16 @@ app.use((req, res, next) => {
 });
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+
+// Debug middleware to log request details for segment routes
+app.use('/api/segments', (req, res, next) => {
+  console.log(`[SEGMENT REQUEST] ${req.method} ${req.originalUrl}`);
+  console.log(`[SEGMENT REQUEST] Content-Type: ${req.headers['content-type']}`);
+  console.log(`[SEGMENT REQUEST] Auth header present: ${!!req.headers['authorization']}`);
+  next();
+});
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -92,7 +100,20 @@ app.get('/env-test', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
+  console.error('Error name:', err.name);
+  console.error('Error code:', err.code);
   console.error('Error stack:', err.stack);
+  
+  // Handle Multer errors specifically
+  if (err.name === 'MulterError') {
+    console.error('Multer error detected:', err.message, err.code);
+    return res.status(400).json({
+      error: 'File upload error',
+      message: err.message,
+      code: err.code
+    });
+  }
+  
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     details: process.env.NODE_ENV === 'development' ? err.stack : undefined
