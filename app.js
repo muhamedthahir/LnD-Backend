@@ -95,6 +95,10 @@ app.get('/env-test', (req, res) => {
     DB_USER: process.env.DB_USER,
     USE_SSL: process.env.USE_SSL,
     SSL_CA_PATH: process.env.SSL_CA_PATH,
+    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+    AWS_REGION: process.env.AWS_REGION,
+    AWS_BUCKET_NAME: process.env.AWS_BUCKET_NAME,
   });
 });
 // Error handling middleware
