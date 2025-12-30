@@ -36,5 +36,13 @@ router.post('/create-bucket', uploadController.createBucket);
 // GET /api/upload/allowed-types
 router.get('/allowed-types', uploadController.getAllowedTypes);
 
+// Get presigned URL for direct S3 upload (single file)
+// POST /api/upload/presigned-url
+router.post('/presigned-url', uploadController.getPresignedUploadUrl);
+
+// Get presigned URLs for direct S3 upload (multiple files)
+// POST /api/upload/presigned-urls
+router.post('/presigned-urls', uploadController.getPresignedUploadUrls);
+
 module.exports = router;
 

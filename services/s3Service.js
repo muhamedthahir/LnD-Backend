@@ -444,6 +444,62 @@ const generateLessonFolderPath = (courseId, courseName, sectionId, sectionName, 
   return path;
 };
 
+/**
+ * Generate a presigned URL for uploading a file to S3
+ * @param {string} key - The S3 object key (file path)
+ * @param {string} contentType - The content type of the file
+ * @param {number} expiresIn - Expiration time in seconds (default 1 hour)
+ * @returns {Promise<object>} - Object containing presigned URL and key
+ */
+const generatePresignedUploadUrl = async (key, contentType, expiresIn = 3600) => {
+  const s3Client = getS3Client();
+  const bucket = process.env.S3_BUCKET_NAME;
+
+  try {
+    const command = new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType
+    });
+
+    const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn });
+    
+    // Generate the final S3 URL (what the file URL will be after upload)
+    const fileUrl = `https://${bucket}.s3.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/${key}`;
+
+    return {
+      presignedUrl,
+      key,
+      fileUrl,
+      expiresIn
+    };
+  } catch (error) {
+    console.error('Error generating presigned upload URL:', error);
+    throw error;
+  }
+};
+
+/**
+ * Generate presigned upload URLs for multiple files
+ * @param {Array} files - Array of {fileName, contentType, folderPath}
+ * @param {number} expiresIn - Expiration time in seconds
+ * @returns {Promise<Array>} - Array of presigned URL objects
+ */
+const generatePresignedUploadUrls = async (files, expiresIn = 3600) => {
+  const results = [];
+  
+  for (const file of files) {
+    const key = `${file.folderPath}${file.fileName}`;
+    const result = await generatePresignedUploadUrl(key, file.contentType, expiresIn);
+    results.push({
+      ...result,
+      originalFileName: file.fileName
+    });
+  }
+  
+  return results;
+};
+
 module.exports = {
   createBucket,
   uploadFile,
@@ -455,6 +511,8 @@ module.exports = {
   convertToPresignedUrls,
   deleteFolder,
   generateSectionFolderPath,
-  generateLessonFolderPath
+  generateLessonFolderPath,
+  generatePresignedUploadUrl,
+  generatePresignedUploadUrls
 };
 

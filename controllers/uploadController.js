@@ -255,11 +255,163 @@ const getAllowedTypes = (req, res) => {
   });
 };
 
+/**
+ * Get presigned URL for uploading a file directly to S3
+ * POST /api/upload/presigned-url
+ * 
+ * Request body:
+ * {
+ *   fileName: string,
+ *   contentType: string,
+ *   courseId: number,
+ *   courseName: string,
+ *   sectionId: number,
+ *   sectionName: string,
+ *   lessonName: string
+ * }
+ */
+const getPresignedUploadUrl = async (req, res) => {
+  try {
+    const { fileName, contentType, courseId, courseName, sectionId, sectionName, lessonName } = req.body;
+
+    if (!fileName || !contentType) {
+      return res.status(400).json({ error: 'fileName and contentType are required' });
+    }
+
+    // Validate content type
+    if (!ALLOWED_MIME_TYPES[contentType]) {
+      return res.status(400).json({ 
+        error: `Content type '${contentType}' is not allowed`,
+        allowedTypes: Object.keys(ALLOWED_MIME_TYPES)
+      });
+    }
+
+    // Generate folder path based on course/section/lesson
+    const folderPath = s3Service.generateLessonFolderPath(
+      courseId,
+      courseName,
+      sectionId,
+      sectionName,
+      lessonName
+    );
+
+    // Generate unique filename to avoid conflicts
+    const timestamp = Date.now();
+    const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const uniqueFileName = `${timestamp}_${sanitizedFileName}`;
+    const key = `${folderPath}${uniqueFileName}`;
+
+    // Generate presigned URL
+    const result = await s3Service.generatePresignedUploadUrl(key, contentType, 3600); // 1 hour expiry
+
+    res.json({
+      success: true,
+      data: {
+        presignedUrl: result.presignedUrl,
+        key: result.key,
+        fileUrl: result.fileUrl,
+        fileName: uniqueFileName,
+        originalFileName: fileName,
+        expiresIn: result.expiresIn
+      }
+    });
+
+  } catch (error) {
+    console.error('Get presigned URL error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate presigned URL',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Get presigned URLs for uploading multiple files directly to S3
+ * POST /api/upload/presigned-urls
+ * 
+ * Request body:
+ * {
+ *   files: [{ fileName: string, contentType: string }],
+ *   courseId: number,
+ *   courseName: string,
+ *   sectionId: number,
+ *   sectionName: string,
+ *   lessonName: string
+ * }
+ */
+const getPresignedUploadUrls = async (req, res) => {
+  try {
+    const { files, courseId, courseName, sectionId, sectionName, lessonName } = req.body;
+
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ error: 'files array is required' });
+    }
+
+    // Validate all content types
+    for (const file of files) {
+      if (!file.fileName || !file.contentType) {
+        return res.status(400).json({ error: 'Each file must have fileName and contentType' });
+      }
+      if (!ALLOWED_MIME_TYPES[file.contentType]) {
+        return res.status(400).json({ 
+          error: `Content type '${file.contentType}' for file '${file.fileName}' is not allowed`
+        });
+      }
+    }
+
+    // Generate folder path
+    const folderPath = s3Service.generateLessonFolderPath(
+      courseId,
+      courseName,
+      sectionId,
+      sectionName,
+      lessonName
+    );
+
+    // Prepare files with unique names and folder paths
+    const timestamp = Date.now();
+    const filesWithPaths = files.map((file, index) => {
+      const sanitizedFileName = file.fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const uniqueFileName = `${timestamp}_${index}_${sanitizedFileName}`;
+      return {
+        fileName: uniqueFileName,
+        originalFileName: file.fileName,
+        contentType: file.contentType,
+        folderPath
+      };
+    });
+
+    // Generate presigned URLs
+    const results = await s3Service.generatePresignedUploadUrls(filesWithPaths, 3600);
+
+    res.json({
+      success: true,
+      data: results.map((result, index) => ({
+        presignedUrl: result.presignedUrl,
+        key: result.key,
+        fileUrl: result.fileUrl,
+        fileName: filesWithPaths[index].fileName,
+        originalFileName: files[index].fileName,
+        expiresIn: result.expiresIn
+      }))
+    });
+
+  } catch (error) {
+    console.error('Get presigned URLs error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate presigned URLs',
+      details: error.message
+    });
+  }
+};
+
 module.exports = {
   uploadFile,
   uploadMultipleFiles,
   deleteFile,
   createBucket,
-  getAllowedTypes
+  getAllowedTypes,
+  getPresignedUploadUrl,
+  getPresignedUploadUrls
 };
 
