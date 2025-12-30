@@ -98,7 +98,7 @@ app.get('/env-test', (req, res) => {
     AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
     AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
     AWS_REGION: process.env.AWS_REGION,
-    AWS_BUCKET_NAME: process.env.AWS_BUCKET_NAME,
+    S3_BUCKET_NAME: process.env.S3_BUCKET_NAME,
   });
 });
 // Error handling middleware

@@ -51,7 +51,7 @@ class SegmentController {
     try {
       // Get course and section info for folder structure
       let courseId, courseName, sectionId, sectionName;
-      
+      console.log('topic_id ', topic_id);
       if (topic_id) {
         const topic = await Topic.findById(topic_id);
         if (topic) {
@@ -208,10 +208,11 @@ class SegmentController {
 
   static async update(req, res) {
     try {
+      console.log('Updating segment');
       const { id } = req.params;
       const { name, description, segment_type, order_index } = req.body;
       let content = req.body.content;
-
+      console.log('req.body ', req.body);
       // Parse content if it's a string (from FormData)
       if (typeof content === 'string') {
         try {
@@ -222,6 +223,7 @@ class SegmentController {
       }
 
       const segment = await Segment.findById(id);
+      console.log('segment ', segment);
       if (!segment) {
         return res.status(404).json({ error: 'Segment not found' });
       }
@@ -239,7 +241,7 @@ class SegmentController {
       const isContentTypeChanging = segment_type && segment_type !== oldSegmentType;
       const wasFileType = FILE_UPLOAD_SEGMENT_TYPES.includes(oldSegmentType);
       const isNowFileType = FILE_UPLOAD_SEGMENT_TYPES.includes(effectiveSegmentType);
-
+      console.log('isContentTypeChanging ', isContentTypeChanging);
       // If changing from a file type to a non-file type (e.g., video to article), delete old S3 files
       if (isContentTypeChanging && wasFileType && !isNowFileType) {
         if (segment.content && segment.content.source === 'upload') {
@@ -265,7 +267,7 @@ class SegmentController {
           }
         }
       }
-
+      console.log('effectiveSegmentType ', effectiveSegmentType);
       // Handle file uploads for video, audio, document types
       if (FILE_UPLOAD_SEGMENT_TYPES.includes(effectiveSegmentType) && req.files && req.files.length > 0) {
         try {
@@ -279,7 +281,7 @@ class SegmentController {
               // Continue with upload even if delete fails
             }
           }
-
+          console.log('Uploading files to S3...');
           const uploadResults = await SegmentController.uploadFilesToS3(
             req.files, 
             segment.topic_id, 
