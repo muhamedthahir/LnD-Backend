@@ -243,16 +243,26 @@ class SegmentController {
       // If changing from a file type to a non-file type (e.g., video to article), delete old S3 files
       if (isContentTypeChanging && wasFileType && !isNowFileType) {
         if (segment.content && segment.content.source === 'upload') {
-          console.log(`Content type changed from ${oldSegmentType} to ${effectiveSegmentType}, deleting old S3 files...`);
-          await SegmentController.deleteS3FilesFromContent(segment.content);
+          try {
+            console.log(`Content type changed from ${oldSegmentType} to ${effectiveSegmentType}, deleting old S3 files...`);
+            await SegmentController.deleteS3FilesFromContent(segment.content);
+          } catch (s3Error) {
+            console.error('S3 delete error (non-blocking):', s3Error.message);
+            // Don't fail the update if S3 delete fails
+          }
         }
       }
 
       // If changing from one file type to another (e.g., video to audio), delete old S3 files
       if (isContentTypeChanging && wasFileType && isNowFileType && oldSegmentType !== effectiveSegmentType) {
         if (segment.content && segment.content.source === 'upload') {
-          console.log(`Content type changed from ${oldSegmentType} to ${effectiveSegmentType}, deleting old S3 files...`);
-          await SegmentController.deleteS3FilesFromContent(segment.content);
+          try {
+            console.log(`Content type changed from ${oldSegmentType} to ${effectiveSegmentType}, deleting old S3 files...`);
+            await SegmentController.deleteS3FilesFromContent(segment.content);
+          } catch (s3Error) {
+            console.error('S3 delete error (non-blocking):', s3Error.message);
+            // Don't fail the update if S3 delete fails
+          }
         }
       }
 
@@ -261,8 +271,13 @@ class SegmentController {
         try {
           // Delete old S3 files before uploading new ones (if same type but replacing files)
           if (segment.content && segment.content.source === 'upload' && !isContentTypeChanging) {
-            console.log('Replacing files, deleting old S3 files before uploading new ones...');
-            await SegmentController.deleteS3FilesFromContent(segment.content);
+            try {
+              console.log('Replacing files, deleting old S3 files before uploading new ones...');
+              await SegmentController.deleteS3FilesFromContent(segment.content);
+            } catch (s3DeleteError) {
+              console.error('S3 delete error (non-blocking):', s3DeleteError.message);
+              // Continue with upload even if delete fails
+            }
           }
 
           const uploadResults = await SegmentController.uploadFilesToS3(
@@ -303,8 +318,13 @@ class SegmentController {
 
       // If changing from upload to embedded, delete old S3 files
       if (content && content.source === 'embedded' && segment.content && segment.content.source === 'upload') {
-        console.log('Changing from upload to embedded, deleting old S3 files...');
-        await SegmentController.deleteS3FilesFromContent(segment.content);
+        try {
+          console.log('Changing from upload to embedded, deleting old S3 files...');
+          await SegmentController.deleteS3FilesFromContent(segment.content);
+        } catch (s3Error) {
+          console.error('S3 delete error (non-blocking):', s3Error.message);
+          // Don't fail the update if S3 delete fails
+        }
       }
 
       await Segment.update(id, { 
