@@ -1,4 +1,7 @@
 const Topic = require('../models/Topic');
+const Course = require('../models/Course');
+const Segment = require('../models/Segment');
+const s3Service = require('../services/s3Service');
 
 class TopicController {
   static async create(req, res) {
@@ -78,6 +81,30 @@ class TopicController {
       const topic = await Topic.findById(id);
       if (!topic) {
         return res.status(404).json({ error: 'Topic not found' });
+      }
+
+      // Get course info for folder path
+      let course = null;
+      if (topic.course_id) {
+        course = await Course.findById(topic.course_id);
+      }
+
+      // Delete all S3 files for this section (and all lessons under it)
+      try {
+        const sectionFolderPath = s3Service.generateSectionFolderPath(
+          course?.id,
+          course?.name,
+          topic.id,
+          topic.name
+        );
+
+        if (sectionFolderPath) {
+          console.log(`Deleting S3 folder for section: ${sectionFolderPath}`);
+          await s3Service.deleteFolder(sectionFolderPath);
+        }
+      } catch (s3Error) {
+        // Log but don't fail the deletion if S3 cleanup fails
+        console.error('Error deleting S3 folder for section:', s3Error);
       }
 
       await Topic.delete(id);
