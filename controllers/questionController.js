@@ -2,6 +2,8 @@ const Question = require('../models/Question');
 const QuestionType = require('../models/QuestionType');
 const ProgrammingQuestion = require('../models/ProgrammingQuestion');
 const Status = require('../models/Status');
+const Option = require('../models/Option');
+const TestCase = require('../models/TestCase');
 
 class QuestionController {
   // Get all questions with pagination
@@ -45,18 +47,31 @@ class QuestionController {
         return res.status(404).json({ error: 'Question not found' });
       }
 
+      const questionType = await QuestionType.findById(question.question_type_id);
+      
       // Get programming question details if applicable
       let programmingQuestion = null;
-      const questionType = await QuestionType.findById(question.question_type_id);
+      let testCases = [];
       
       if (questionType?.name === 'Programming') {
         programmingQuestion = await ProgrammingQuestion.findByQuestionId(id);
+        if (programmingQuestion) {
+          testCases = await TestCase.findByProgrammingQuestionId(programmingQuestion.id);
+        }
+      }
+
+      // Get options for MCQ/Multi Select
+      let options = [];
+      if (questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') {
+        options = await Option.findByQuestionId(id);
       }
 
       res.json({ 
         question,
         programmingQuestion,
-        hasTestCases: programmingQuestion ? await ProgrammingQuestion.hasTestCases(programmingQuestion.id) : null
+        testCases,
+        options,
+        hasTestCases: programmingQuestion ? testCases.length > 0 : null
       });
     } catch (error) {
       console.error('Get question error:', error);
@@ -82,7 +97,9 @@ class QuestionController {
         hint,
         tags,
         // Programming question specific fields
-        programming_details
+        programming_details,
+        // MCQ/Multi Select options
+        options
       } = req.body;
       const userId = req.user?.id;
 
@@ -123,10 +140,10 @@ class QuestionController {
         tags
       });
 
-      // Create programming question if type is Programming
-      let programmingQuestionId = null;
       const questionType = await QuestionType.findById(question_type_id);
       
+      // Create programming question if type is Programming
+      let programmingQuestionId = null;
       if (questionType?.name === 'Programming' && programming_details) {
         programmingQuestionId = await ProgrammingQuestion.create({
           question_id: questionId,
@@ -134,16 +151,24 @@ class QuestionController {
         });
       }
 
+      // Create options for MCQ/Multi Select
+      if ((questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') && options && options.length > 0) {
+        await Option.setOptions(questionId, options);
+      }
+
       const question = await Question.findById(questionId);
       let programmingQuestion = null;
       if (programmingQuestionId) {
         programmingQuestion = await ProgrammingQuestion.findById(programmingQuestionId);
       }
+      
+      const savedOptions = await Option.findByQuestionId(questionId);
 
       res.status(201).json({
         message: 'Question created successfully',
         question,
-        programmingQuestion
+        programmingQuestion,
+        options: savedOptions
       });
     } catch (error) {
       console.error('Create question error:', error);
@@ -170,7 +195,8 @@ class QuestionController {
         explanation,
         hint,
         tags,
-        programming_details
+        programming_details,
+        options
       } = req.body;
       const userId = req.user?.id;
 
@@ -205,13 +231,21 @@ class QuestionController {
         }
       }
 
+      // Update options for MCQ/Multi Select
+      const questionType = await QuestionType.findById(question_type_id || existing.question_type_id);
+      if ((questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') && options) {
+        await Option.setOptions(id, options);
+      }
+
       const question = await Question.findById(id);
       const programmingQuestion = await ProgrammingQuestion.findByQuestionId(id);
+      const savedOptions = await Option.findByQuestionId(id);
 
       res.json({
         message: 'Question updated successfully',
         question,
-        programmingQuestion
+        programmingQuestion,
+        options: savedOptions
       });
     } catch (error) {
       console.error('Update question error:', error);
