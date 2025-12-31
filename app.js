@@ -81,6 +81,12 @@ app.use('/api/codeExecute', require('./routes/codeEditorRoutes'));
 app.use('/api/upload', require('./routes/uploadRoutes'));
 app.use('/api/user-courses', require('./routes/userCourseRoutes'));
 
+// Question Bank routes
+app.use('/api/question-banks', require('./routes/questionBankRoutes'));
+app.use('/api/questions', require('./routes/questionRoutes'));
+app.use('/api/test-cases', require('./routes/testCaseRoutes'));
+app.use('/api/master-data', require('./routes/masterDataRoutes'));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
