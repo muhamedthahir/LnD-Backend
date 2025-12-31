@@ -39,6 +39,10 @@ class AdministrationController {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
+      // Handle enrollments (page 2 data)
+      let invitesSent = false;
+      const collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+
       // Create administration - will be published when invites are sent
       const adminId = await CourseAdministration.create({
         displayId: displayId || `ADMIN-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
@@ -49,12 +53,9 @@ class AdministrationController {
         startDate: new Date(startTime),
         endDate: new Date(endTime),
         status: 'draft', // Will be updated to published after invites are sent
-        createdBy: userId
+        createdBy: userId,
+        college: collegeName || null
       });
-
-      // Handle enrollments (page 2 data)
-      let invitesSent = false;
-      const collegeName = candidateType === 'group' ? groupCollege : individualCollege;
       
       // Update users' college_name to match the selected college when enrollments are created
       // This ensures the college name is correctly reflected in the administration table
