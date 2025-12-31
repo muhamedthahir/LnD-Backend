@@ -18,7 +18,8 @@ class CourseAdministration {
       startDate,
       endDate,
       status,
-      createdBy
+      createdBy,
+      college
     } = adminData;
 
     try {
@@ -33,8 +34,9 @@ class CourseAdministration {
           end_date,
           status,
           created_by,
+          college,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           displayId,
           administrationName,
@@ -44,7 +46,8 @@ class CourseAdministration {
           startDate,
           endDate,
           status || 'draft',
-          createdBy
+          createdBy,
+          college || null
         ]
       );
       return result.insertId;
@@ -62,8 +65,9 @@ class CourseAdministration {
             end_date,
             status,
             created_by,
+            college,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             displayId,
             administrationName,
@@ -73,7 +77,8 @@ class CourseAdministration {
             startDate,
             endDate,
             status || 'draft',
-            createdBy
+            createdBy,
+            college || null
           ]
         );
         return result.insertId;
@@ -125,7 +130,7 @@ class CourseAdministration {
          c.name as course_name,
          u.name as created_by_name,
          COUNT(DISTINCT e.id) as total_invites,
-         GROUP_CONCAT(DISTINCT u2.college_name) as colleges
+         COALESCE(a.college, GROUP_CONCAT(DISTINCT u2.college_name)) as colleges
          FROM course_administrations a
          LEFT JOIN courses c ON a.course_id = c.id
          LEFT JOIN users u ON a.created_by = u.id
@@ -148,8 +153,8 @@ class CourseAdministration {
       }
 
       if (filters.college) {
-        query += ' AND u2.college_name = ?';
-        params.push(filters.college);
+        query += ' AND (a.college = ? OR u2.college_name = ?)';
+        params.push(filters.college, filters.college);
       }
 
       query += ' GROUP BY a.id';
@@ -180,8 +185,8 @@ class CourseAdministration {
       }
 
       if (filters.college) {
-        countQuery += ' AND u2.college_name = ?';
-        countParams.push(filters.college);
+        countQuery += ' AND (a.college = ? OR u2.college_name = ?)';
+        countParams.push(filters.college, filters.college);
       }
 
       const [countRows] = await executeWithRetry(countQuery, countParams);
@@ -285,16 +290,40 @@ class CourseAdministration {
           end_date DATETIME NOT NULL,
           status ENUM('draft', 'published') DEFAULT 'draft',
           created_by INT NOT NULL,
+          college VARCHAR(255) NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           INDEX idx_course_id (course_id),
           INDEX idx_status (status),
           INDEX idx_created_by (created_by),
           INDEX idx_display_id (display_id),
+          INDEX idx_college (college),
           FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE RESTRICT,
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
+
+      // Add college column if it doesn't exist (for existing tables)
+      try {
+        const [columns] = await executeWithRetry(`
+          SELECT COLUMN_NAME
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_SCHEMA = DATABASE() 
+          AND TABLE_NAME = 'course_administrations' 
+          AND COLUMN_NAME = 'college'
+        `);
+        
+        if (columns.length === 0) {
+          await executeWithRetry(`
+            ALTER TABLE course_administrations 
+            ADD COLUMN college VARCHAR(255) NULL,
+            ADD INDEX idx_college (college)
+          `);
+          console.log('Added college column to course_administrations table');
+        }
+      } catch (error) {
+        console.warn('Could not add college column (might already exist):', error.message);
+      }
       
       // Update enrollments table to support administrations
       try {

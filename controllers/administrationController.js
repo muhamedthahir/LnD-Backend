@@ -350,7 +350,8 @@ class AdministrationController {
         competencyLevel,
         courseId,
         startTime,
-        endTime
+        endTime,
+        college
       } = req.body;
 
       const userId = req.user?.id;
@@ -372,7 +373,8 @@ class AdministrationController {
         startDate: new Date(startTime),
         endDate: new Date(endTime),
         status: 'draft',
-        createdBy: userId
+        createdBy: userId,
+        college: college || null
       });
 
       const administration = await CourseAdministration.findById(adminId);
