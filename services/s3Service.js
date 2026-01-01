@@ -299,12 +299,24 @@ const convertToPresignedUrls = async (content, expiresIn = 10800) => {
     return content;
   }
 
+  // Check if S3 is configured before attempting to generate presigned URLs
+  const bucket = process.env.S3_BUCKET_NAME;
+  if (!bucket) {
+    // S3 is not configured, return original content with existing URLs
+    return content;
+  }
+
   try {
     const updatedContent = { ...content };
 
     // Single file (video/audio)
     if (content.key) {
-      updatedContent.presignedUrl = await getPresignedUrl(content.key, expiresIn);
+      try {
+        updatedContent.presignedUrl = await getPresignedUrl(content.key, expiresIn);
+      } catch (error) {
+        console.error('Error generating presigned URL for single file:', error);
+        // Keep original URL if presigning fails
+      }
     }
 
     // Multiple files (documents)
@@ -312,10 +324,16 @@ const convertToPresignedUrls = async (content, expiresIn = 10800) => {
       updatedContent.files = await Promise.all(
         content.files.map(async (file) => {
           if (file.key) {
-            return {
-              ...file,
-              presignedUrl: await getPresignedUrl(file.key, expiresIn)
-            };
+            try {
+              return {
+                ...file,
+                presignedUrl: await getPresignedUrl(file.key, expiresIn)
+              };
+            } catch (error) {
+              console.error('Error generating presigned URL for file:', file.key, error);
+              // Return original file if presigning fails
+              return file;
+            }
           }
           return file;
         })
@@ -452,8 +470,14 @@ const generateLessonFolderPath = (courseId, courseName, sectionId, sectionName, 
  * @returns {Promise<object>} - Object containing presigned URL and key
  */
 const generatePresignedUploadUrl = async (key, contentType, expiresIn = 3600) => {
-  const s3Client = getS3Client();
   const bucket = process.env.S3_BUCKET_NAME;
+  
+  // Check if S3 is configured
+  if (!bucket || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    throw new Error('S3 is not configured. Please set S3_BUCKET_NAME, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY environment variables.');
+  }
+
+  const s3Client = getS3Client();
 
   try {
     const command = new PutObjectCommand({
