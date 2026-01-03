@@ -12,3 +12,6 @@ router.delete('/:id', authenticate, authorize('primary_admin', 'college_admin'),
 
 module.exports = router;
 
+
+
+

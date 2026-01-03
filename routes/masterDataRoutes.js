@@ -20,3 +20,6 @@ router.post('/categories', authenticate, authorize('primary_admin', 'college_adm
 
 module.exports = router;
 
+
+
+
