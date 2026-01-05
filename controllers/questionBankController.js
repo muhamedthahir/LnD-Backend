@@ -50,7 +50,7 @@ class QuestionBankController {
   // Create question bank
   static async createQuestionBank(req, res) {
     try {
-      const { name, description, institution_id, status_id, tags } = req.body;
+      const { name, description, institution_id, status_id, level_id, category_id, tags } = req.body;
       const userId = req.user?.id;
 
       if (!name) {
@@ -73,6 +73,8 @@ class QuestionBankController {
         description,
         institution_id,
         status_id: statusId,
+        level_id,
+        category_id,
         created_by: userId,
         tags
       });
@@ -93,7 +95,7 @@ class QuestionBankController {
   static async updateQuestionBank(req, res) {
     try {
       const { id } = req.params;
-      const { name, description, institution_id, status_id, active, tags } = req.body;
+      const { name, description, institution_id, status_id, level_id, category_id, active, tags } = req.body;
       const userId = req.user?.id;
 
       const existing = await QuestionBank.findById(id);
@@ -106,6 +108,8 @@ class QuestionBankController {
         description,
         institution_id,
         status_id: status_id || existing.status_id,
+        level_id: level_id !== undefined ? level_id : existing.level_id,
+        category_id: category_id !== undefined ? category_id : existing.category_id,
         active: active !== undefined ? active : existing.active,
         updated_by: userId,
         tags

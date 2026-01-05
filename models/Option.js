@@ -1,10 +1,10 @@
 const pool = require('../config/db');
 
 class Option {
-  static async findByQuestionId(questionId) {
+  static async findByMcqQuestionId(mcqQuestionId) {
     const [rows] = await pool.execute(
-      `SELECT * FROM options WHERE question_id = ? ORDER BY \`order\` ASC`,
-      [questionId]
+      `SELECT * FROM options WHERE mcq_multiselect_question_id = ? ORDER BY \`order\` ASC`,
+      [mcqQuestionId]
     );
     return rows;
   }
@@ -19,7 +19,7 @@ class Option {
 
   static async create(data) {
     const {
-      question_id,
+      mcq_multiselect_question_id,
       text,
       is_correct = false,
       order = 0,
@@ -27,9 +27,9 @@ class Option {
     } = data;
 
     const [result] = await pool.execute(
-      `INSERT INTO options (question_id, text, is_correct, \`order\`, explanation) 
+      `INSERT INTO options (mcq_multiselect_question_id, text, is_correct, \`order\`, explanation) 
        VALUES (?, ?, ?, ?, ?)`,
-      [question_id, text, is_correct, order, explanation || null]
+      [mcq_multiselect_question_id, text, is_correct, order, explanation || null]
     );
 
     return { id: result.insertId };
@@ -58,20 +58,20 @@ class Option {
     return true;
   }
 
-  static async deleteByQuestionId(questionId) {
-    await pool.execute('DELETE FROM options WHERE question_id = ?', [questionId]);
+  static async deleteByMcqQuestionId(mcqQuestionId) {
+    await pool.execute('DELETE FROM options WHERE mcq_multiselect_question_id = ?', [mcqQuestionId]);
     return true;
   }
 
-  static async setOptions(questionId, options) {
+  static async setOptions(mcqQuestionId, options) {
     // Delete existing options
-    await this.deleteByQuestionId(questionId);
+    await this.deleteByMcqQuestionId(mcqQuestionId);
     
     // Add new options
     for (let i = 0; i < options.length; i++) {
       const opt = options[i];
       await this.create({
-        question_id: questionId,
+        mcq_multiselect_question_id: mcqQuestionId,
         text: opt.text,
         is_correct: opt.is_correct || false,
         order: i,
@@ -84,7 +84,3 @@ class Option {
 }
 
 module.exports = Option;
-
-
-
-

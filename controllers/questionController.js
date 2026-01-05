@@ -1,6 +1,7 @@
 const Question = require('../models/Question');
 const QuestionType = require('../models/QuestionType');
 const ProgrammingQuestion = require('../models/ProgrammingQuestion');
+const MCQMultiSelectQuestion = require('../models/MCQMultiSelectQuestion');
 const Status = require('../models/Status');
 const Option = require('../models/Option');
 const TestCase = require('../models/TestCase');
@@ -62,13 +63,18 @@ class QuestionController {
 
       // Get options for MCQ/Multi Select
       let options = [];
+      let mcqQuestion = null;
       if (questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') {
-        options = await Option.findByQuestionId(id);
+        mcqQuestion = await MCQMultiSelectQuestion.findByQuestionId(id);
+        if (mcqQuestion) {
+          options = await Option.findByMcqQuestionId(mcqQuestion.id);
+        }
       }
 
       res.json({ 
         question,
         programmingQuestion,
+        mcqQuestion,
         testCases,
         options,
         hasTestCases: programmingQuestion ? testCases.length > 0 : null
@@ -98,6 +104,8 @@ class QuestionController {
         tags,
         // Programming question specific fields
         programming_details,
+        // MCQ/Multi Select specific fields
+        mcq_details,
         // MCQ/Multi Select options
         options
       } = req.body;
@@ -151,9 +159,21 @@ class QuestionController {
         });
       }
 
-      // Create options for MCQ/Multi Select
-      if ((questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') && options && options.length > 0) {
-        await Option.setOptions(questionId, options);
+      // Create MCQ/Multi Select question and options
+      let mcqQuestion = null;
+      let savedOptions = [];
+      if (questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') {
+        // Create MCQ question record
+        mcqQuestion = await MCQMultiSelectQuestion.findOrCreate(questionId, {
+          is_multi_select: questionType?.name === 'Multi Select',
+          ...mcq_details
+        });
+        
+        // Create options
+        if (options && options.length > 0) {
+          await Option.setOptions(mcqQuestion.id, options);
+          savedOptions = await Option.findByMcqQuestionId(mcqQuestion.id);
+        }
       }
 
       const question = await Question.findById(questionId);
@@ -161,13 +181,12 @@ class QuestionController {
       if (programmingQuestionId) {
         programmingQuestion = await ProgrammingQuestion.findById(programmingQuestionId);
       }
-      
-      const savedOptions = await Option.findByQuestionId(questionId);
 
       res.status(201).json({
         message: 'Question created successfully',
         question,
         programmingQuestion,
+        mcqQuestion,
         options: savedOptions
       });
     } catch (error) {
@@ -196,6 +215,7 @@ class QuestionController {
         hint,
         tags,
         programming_details,
+        mcq_details,
         options
       } = req.body;
       const userId = req.user?.id;
@@ -231,20 +251,40 @@ class QuestionController {
         }
       }
 
-      // Update options for MCQ/Multi Select
+      // Update MCQ/Multi Select question and options
       const questionType = await QuestionType.findById(question_type_id || existing.question_type_id);
-      if ((questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') && options) {
-        await Option.setOptions(id, options);
+      let mcqQuestion = null;
+      let savedOptions = [];
+      
+      if (questionType?.name === 'MCQ' || questionType?.name === 'Multi Select') {
+        // Find or create MCQ question record
+        mcqQuestion = await MCQMultiSelectQuestion.findOrCreate(id, {
+          is_multi_select: questionType?.name === 'Multi Select',
+          ...mcq_details
+        });
+        
+        // Update MCQ details if provided
+        if (mcq_details) {
+          await MCQMultiSelectQuestion.update(mcqQuestion.id, mcq_details);
+          mcqQuestion = await MCQMultiSelectQuestion.findById(mcqQuestion.id);
+        }
+        
+        // Update options if provided
+        if (options) {
+          await Option.setOptions(mcqQuestion.id, options);
+        }
+        
+        savedOptions = await Option.findByMcqQuestionId(mcqQuestion.id);
       }
 
       const question = await Question.findById(id);
       const programmingQuestion = await ProgrammingQuestion.findByQuestionId(id);
-      const savedOptions = await Option.findByQuestionId(id);
 
       res.json({
         message: 'Question updated successfully',
         question,
         programmingQuestion,
+        mcqQuestion,
         options: savedOptions
       });
     } catch (error) {
@@ -313,4 +353,3 @@ class QuestionController {
 }
 
 module.exports = QuestionController;
-

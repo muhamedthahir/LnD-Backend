@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS question_banks (
   description TEXT,
   institution_id INT NULL,
   status_id INT NOT NULL,
+  level_id INT NULL,
+  category_id INT NULL,
   active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -85,11 +87,15 @@ CREATE TABLE IF NOT EXISTS question_banks (
   updated_by INT NULL,
   FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE SET NULL,
   FOREIGN KEY (status_id) REFERENCES statuses(id),
+  FOREIGN KEY (level_id) REFERENCES levels(id) ON DELETE SET NULL,
+  FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_name (name),
   INDEX idx_institution_id (institution_id),
   INDEX idx_status_id (status_id),
+  INDEX idx_level_id (level_id),
+  INDEX idx_category_id (category_id),
   INDEX idx_active (active)
 );
 

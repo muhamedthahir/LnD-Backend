@@ -6,11 +6,15 @@ class QuestionBank {
       SELECT qb.*, 
              s.name as status_name,
              i.name as institution_name,
+             l.name as level_name,
+             c.name as category_name,
              u.name as created_by_name,
              (SELECT COUNT(*) FROM questions q WHERE q.question_bank_id = qb.id) as question_count
       FROM question_banks qb
       LEFT JOIN statuses s ON qb.status_id = s.id
       LEFT JOIN institutions i ON qb.institution_id = i.id
+      LEFT JOIN levels l ON qb.level_id = l.id
+      LEFT JOIN categories c ON qb.category_id = c.id
       LEFT JOIN users u ON qb.created_by = u.id
       WHERE 1=1
     `;
@@ -54,10 +58,14 @@ class QuestionBank {
       `SELECT qb.*, 
               s.name as status_name,
               i.name as institution_name,
+              l.name as level_name,
+              c.name as category_name,
               u.name as created_by_name
        FROM question_banks qb
        LEFT JOIN statuses s ON qb.status_id = s.id
        LEFT JOIN institutions i ON qb.institution_id = i.id
+       LEFT JOIN levels l ON qb.level_id = l.id
+       LEFT JOIN categories c ON qb.category_id = c.id
        LEFT JOIN users u ON qb.created_by = u.id
        WHERE qb.id = ?`,
       [id]
@@ -71,12 +79,12 @@ class QuestionBank {
   }
 
   static async create(data) {
-    const { name, description, institution_id, status_id, active = true, created_by, tags } = data;
+    const { name, description, institution_id, status_id, level_id, category_id, active = true, created_by, tags } = data;
     
     const [result] = await pool.execute(
-      `INSERT INTO question_banks (name, description, institution_id, status_id, active, created_by, updated_by) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [name, description || null, institution_id || null, status_id, active, created_by || null, created_by || null]
+      `INSERT INTO question_banks (name, description, institution_id, status_id, level_id, category_id, active, created_by, updated_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, description || null, institution_id || null, status_id, level_id || null, category_id || null, active, created_by || null, created_by || null]
     );
 
     const bankId = result.insertId;
@@ -90,13 +98,13 @@ class QuestionBank {
   }
 
   static async update(id, data) {
-    const { name, description, institution_id, status_id, active, updated_by, tags } = data;
+    const { name, description, institution_id, status_id, level_id, category_id, active, updated_by, tags } = data;
     
     await pool.execute(
       `UPDATE question_banks 
-       SET name = ?, description = ?, institution_id = ?, status_id = ?, active = ?, updated_by = ?
+       SET name = ?, description = ?, institution_id = ?, status_id = ?, level_id = ?, category_id = ?, active = ?, updated_by = ?
        WHERE id = ?`,
-      [name, description || null, institution_id || null, status_id, active, updated_by || null, id]
+      [name, description || null, institution_id || null, status_id, level_id || null, category_id || null, active, updated_by || null, id]
     );
 
     // Update tags if provided

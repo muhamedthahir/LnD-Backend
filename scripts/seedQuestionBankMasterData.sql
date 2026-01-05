@@ -83,3 +83,4 @@ SELECT 'Categories', COUNT(*) FROM categories
 UNION ALL
 SELECT 'Tags', COUNT(*) FROM tags;
 
+
