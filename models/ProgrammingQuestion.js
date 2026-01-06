@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const CodeTemplate = require('./CodeTemplate');
 
 class ProgrammingQuestion {
   static async findById(id) {
@@ -42,7 +43,8 @@ class ProgrammingQuestion {
       constraints,
       sample_input,
       sample_output,
-      languages
+      languages,
+      code_templates
     } = data;
 
     const [result] = await pool.execute(
@@ -64,6 +66,11 @@ class ProgrammingQuestion {
       await this.setLanguages(progQuestionId, languages);
     }
 
+    // Add code templates if provided
+    if (code_templates && Object.keys(code_templates).length > 0) {
+      await this.setCodeTemplates(progQuestionId, code_templates);
+    }
+
     return progQuestionId;
   }
 
@@ -77,7 +84,8 @@ class ProgrammingQuestion {
       constraints,
       sample_input,
       sample_output,
-      languages
+      languages,
+      code_templates
     } = data;
 
     await pool.execute(
@@ -95,6 +103,11 @@ class ProgrammingQuestion {
     // Update languages if provided
     if (languages !== undefined) {
       await this.setLanguages(id, languages || []);
+    }
+
+    // Update code templates if provided
+    if (code_templates !== undefined) {
+      await this.setCodeTemplates(id, code_templates || {});
     }
 
     return true;
@@ -129,6 +142,34 @@ class ProgrammingQuestion {
         [programmingQuestionId, languageId]
       );
     }
+    return true;
+  }
+
+  static async setCodeTemplates(programmingQuestionId, codeTemplates) {
+    // codeTemplates is an object: { language_id: { template_code, solution_code } }
+    
+    // Get existing templates
+    const existingTemplates = await CodeTemplate.findByProgrammingQuestionId(programmingQuestionId);
+    const existingLangIds = existingTemplates.map(t => t.language_id);
+    const newLangIds = Object.keys(codeTemplates).map(id => parseInt(id));
+    
+    // Remove templates for languages no longer included
+    for (const template of existingTemplates) {
+      if (!newLangIds.includes(template.language_id)) {
+        await CodeTemplate.delete(template.id);
+      }
+    }
+    
+    // Upsert templates for each language
+    for (const [languageId, templateData] of Object.entries(codeTemplates)) {
+      await CodeTemplate.upsert({
+        programming_question_id: programmingQuestionId,
+        language_id: parseInt(languageId),
+        template_code: templateData.template_code || '',
+        solution_code: templateData.solution_code || ''
+      });
+    }
+    
     return true;
   }
 

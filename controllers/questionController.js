@@ -71,12 +71,19 @@ class QuestionController {
         }
       }
 
+      // Get code templates for programming questions
+      let codeTemplates = [];
+      if (programmingQuestion) {
+        codeTemplates = programmingQuestion.codeTemplates || [];
+      }
+
       res.json({ 
         question,
         programmingQuestion,
         mcqQuestion,
         testCases,
         options,
+        codeTemplates,
         hasTestCases: programmingQuestion ? testCases.length > 0 : null
       });
     } catch (error) {
