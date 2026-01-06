@@ -16,7 +16,57 @@ class Question {
   }
 
   static async getAllPaginated({ search, limit = 10, offset = 0, questionBankId, questionTypeId, levelId, statusId, categoryId }) {
-    let query = `
+    // Base WHERE conditions
+    let whereClause = 'WHERE 1=1';
+    const params = [];
+
+    if (search) {
+      whereClause += ' AND (q.name LIKE ? OR q.code LIKE ? OR q.description LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    if (questionBankId) {
+      whereClause += ' AND q.question_bank_id = ?';
+      params.push(questionBankId);
+    }
+
+    if (questionTypeId) {
+      whereClause += ' AND q.question_type_id = ?';
+      params.push(questionTypeId);
+    }
+
+    if (levelId) {
+      whereClause += ' AND q.level_id = ?';
+      params.push(levelId);
+    }
+
+    if (statusId) {
+      whereClause += ' AND q.status_id = ?';
+      params.push(statusId);
+    }
+
+    if (categoryId) {
+      whereClause += ' AND q.category_id = ?';
+      params.push(categoryId);
+    }
+
+    // Get total count with a simpler query structure
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM questions q
+      LEFT JOIN question_types qt ON q.question_type_id = qt.id
+      LEFT JOIN levels l ON q.level_id = l.id
+      LEFT JOIN statuses s ON q.status_id = s.id
+      LEFT JOIN categories c ON q.category_id = c.id
+      LEFT JOIN question_banks qb ON q.question_bank_id = qb.id
+      LEFT JOIN users u ON q.created_by = u.id
+      ${whereClause}
+    `;
+    const [countRows] = await pool.execute(countQuery, params);
+    const total = countRows[0].total;
+
+    // Get paginated results
+    const dataQuery = `
       SELECT q.*, 
              qt.name as question_type_name,
              l.name as level_name,
@@ -31,49 +81,11 @@ class Question {
       LEFT JOIN categories c ON q.category_id = c.id
       LEFT JOIN question_banks qb ON q.question_bank_id = qb.id
       LEFT JOIN users u ON q.created_by = u.id
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY q.created_at DESC
+      LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
     `;
-    const params = [];
-
-    if (search) {
-      query += ' AND (q.name LIKE ? OR q.code LIKE ? OR q.description LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    if (questionBankId) {
-      query += ' AND q.question_bank_id = ?';
-      params.push(questionBankId);
-    }
-
-    if (questionTypeId) {
-      query += ' AND q.question_type_id = ?';
-      params.push(questionTypeId);
-    }
-
-    if (levelId) {
-      query += ' AND q.level_id = ?';
-      params.push(levelId);
-    }
-
-    if (statusId) {
-      query += ' AND q.status_id = ?';
-      params.push(statusId);
-    }
-
-    if (categoryId) {
-      query += ' AND q.category_id = ?';
-      params.push(categoryId);
-    }
-
-    // Get total count
-    const countQuery = query.replace(/SELECT q\.\*.*FROM/, 'SELECT COUNT(*) as total FROM');
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
-
-    // Get paginated results
-    query += ' ORDER BY q.created_at DESC';
-    query += ` LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
-    const [rows] = await pool.execute(query, params);
+    const [rows] = await pool.execute(dataQuery, params);
 
     // Get tags for each question
     for (const question of rows) {

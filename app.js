@@ -87,6 +87,9 @@ app.use('/api/questions', require('./routes/questionRoutes'));
 app.use('/api/test-cases', require('./routes/testCaseRoutes'));
 app.use('/api/master-data', require('./routes/masterDataRoutes'));
 
+// Practice Segment routes
+app.use('/api/practice-segments', require('./routes/practiceSegmentRoutes'));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
