@@ -357,6 +357,46 @@ class QuestionController {
       res.status(500).json({ error: error.message || 'Internal server error' });
     }
   }
+
+  // Get programming question details (for code editor integration)
+  static async getProgrammingDetails(req, res) {
+    try {
+      const { id } = req.params;
+      
+      const question = await Question.findById(id);
+      if (!question) {
+        return res.status(404).json({ error: 'Question not found' });
+      }
+
+      // Get programming question details
+      const programmingQuestion = await ProgrammingQuestion.findByQuestionId(id);
+      
+      if (!programmingQuestion) {
+        return res.status(404).json({ error: 'Programming question details not found' });
+      }
+
+      // Get test cases (non-hidden for visible, all for checking)
+      const allTestCases = await TestCase.findByProgrammingQuestionId(programmingQuestion.id);
+      
+      // Filter test cases - show non-hidden ones to users
+      const visibleTestCases = allTestCases.filter(tc => !tc.is_hidden && tc.is_active);
+      
+      res.json({
+        programmingQuestion,
+        languages: programmingQuestion.languages || [],
+        codeTemplates: programmingQuestion.codeTemplates || [],
+        testCases: visibleTestCases,
+        constraints: programmingQuestion.constraints,
+        sample_input: programmingQuestion.sample_input,
+        sample_output: programmingQuestion.sample_output,
+        time_limit: programmingQuestion.time_limit,
+        memory_limit: programmingQuestion.memory_limit
+      });
+    } catch (error) {
+      console.error('Get programming details error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = QuestionController;
