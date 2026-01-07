@@ -11,7 +11,8 @@ class CourseController {
         short_description, 
         course_outcomes, 
         status,
-        thumbnail
+        thumbnail,
+        has_to_go_by_section
       } = req.body;
       
       if (!name) {
@@ -26,6 +27,7 @@ class CourseController {
         course_outcomes,
         status: status || 'draft',
         thumbnail,
+        has_to_go_by_section: has_to_go_by_section || false,
         created_by: req.user.id
       });
 
@@ -94,7 +96,8 @@ class CourseController {
         short_description, 
         course_outcomes, 
         status,
-        thumbnail
+        thumbnail,
+        has_to_go_by_section
       } = req.body;
 
       const course = await Course.findById(id);
@@ -109,7 +112,8 @@ class CourseController {
         short_description, 
         course_outcomes, 
         status,
-        thumbnail
+        thumbnail,
+        has_to_go_by_section
       });
       const updatedCourse = await Course.findById(id);
       
