@@ -16,6 +16,9 @@ router.post('/lesson/start', SubmissionController.startLesson);
 // Update lesson progress
 router.post('/lesson/progress', SubmissionController.updateLessonProgress);
 
+// Update media progress (video/audio tracking)
+router.post('/lesson/media-progress', SubmissionController.updateMediaProgress);
+
 // Mark lesson as complete
 router.post('/lesson/complete', SubmissionController.completeLesson);
 

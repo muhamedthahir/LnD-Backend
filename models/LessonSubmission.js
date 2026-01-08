@@ -101,17 +101,23 @@ class LessonSubmission {
 
   /**
    * Update progress
+   * @param {number} user_id - User ID
+   * @param {number} segment_id - Segment ID
+   * @param {number} progress_percentage - Current progress (0-100)
+   * @param {number} threshold_value - Threshold to mark as complete (default 100)
    */
-  static async updateProgress(user_id, segment_id, progress_percentage) {
+  static async updateProgress(user_id, segment_id, progress_percentage, threshold_value = 100) {
     const existing = await this.findByUserAndSegment(user_id, segment_id);
     
     if (existing) {
       let status = existing.status;
       let completed_at = existing.completed_at;
       
-      if (progress_percentage >= 100) {
+      // Mark as complete if progress meets or exceeds threshold
+      if (progress_percentage >= threshold_value) {
         status = 'completed';
         completed_at = new Date();
+        progress_percentage = 100; // Set to 100 when threshold is met
       } else if (progress_percentage > 0) {
         status = 'in_progress';
       }
@@ -126,9 +132,54 @@ class LessonSubmission {
         [progress_percentage, status, completed_at, existing.id]
       );
       
-      return existing.id;
+      return { id: existing.id, status, progress_percentage, completed_at };
     }
     return null;
+  }
+
+  /**
+   * Update media progress (for video/audio tracking)
+   * Stores current position and duration
+   */
+  static async updateMediaProgress(user_id, segment_id, current_position, total_duration, threshold_value = 100) {
+    const existing = await this.findByUserAndSegment(user_id, segment_id);
+    
+    if (!existing) return null;
+    
+    // Calculate progress percentage based on watched/listened portion
+    const progress_percentage = total_duration > 0 
+      ? Math.min(Math.round((current_position / total_duration) * 100), 100)
+      : 0;
+    
+    let status = existing.status;
+    let completed_at = existing.completed_at;
+    
+    // Mark as complete if progress meets or exceeds threshold
+    if (progress_percentage >= threshold_value) {
+      status = 'completed';
+      completed_at = new Date();
+    } else if (progress_percentage > 0) {
+      status = 'in_progress';
+    }
+    
+    await pool.execute(
+      `UPDATE lesson_submissions 
+       SET progress_percentage = ?,
+           status = ?,
+           completed_at = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [status === 'completed' ? 100 : progress_percentage, status, completed_at, existing.id]
+    );
+    
+    return { 
+      id: existing.id, 
+      status, 
+      progress_percentage: status === 'completed' ? 100 : progress_percentage,
+      completed_at,
+      current_position,
+      total_duration
+    };
   }
 
   /**

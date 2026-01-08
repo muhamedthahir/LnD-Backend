@@ -73,11 +73,18 @@ class SubmissionController {
         return res.status(400).json({ error: 'segment_id and progress_percentage are required' });
       }
       
-      // Update lesson submission
-      await LessonSubmission.updateProgress(user_id, segment_id, progress_percentage);
+      // Get segment to check threshold_value
+      const [segmentData] = await pool.execute(
+        'SELECT threshold_value FROM segments WHERE id = ?',
+        [segment_id]
+      );
+      const threshold_value = segmentData[0]?.threshold_value || 100;
+      
+      // Update lesson submission with threshold check
+      const result = await LessonSubmission.updateProgress(user_id, segment_id, progress_percentage, threshold_value);
       
       // Update all progress (segment -> topic -> course)
-      await ProgressService.updateLessonProgress(user_id, segment_id, progress_percentage, time_spent_seconds);
+      await ProgressService.updateLessonProgress(user_id, segment_id, result?.progress_percentage || progress_percentage, time_spent_seconds);
       
       // Get updated submission
       const submission = await LessonSubmission.findByUserAndSegment(user_id, segment_id);
@@ -85,11 +92,75 @@ class SubmissionController {
       res.json({
         success: true,
         message: 'Progress updated',
-        submission
+        submission,
+        threshold_value,
+        is_complete: result?.status === 'completed'
       });
     } catch (error) {
       console.error('Update lesson progress error:', error);
       res.status(500).json({ error: 'Failed to update progress' });
+    }
+  }
+
+  /**
+   * Update media progress (for video/audio)
+   * POST /api/submissions/lesson/media-progress
+   */
+  static async updateMediaProgress(req, res) {
+    try {
+      const { segment_id, current_position, total_duration, topic_id, course_id } = req.body;
+      const user_id = req.user.id;
+      
+      if (!segment_id || current_position === undefined || total_duration === undefined) {
+        return res.status(400).json({ error: 'segment_id, current_position, and total_duration are required' });
+      }
+      
+      // First ensure submission exists (create if needed)
+      if (topic_id && course_id) {
+        await LessonSubmission.createOrUpdate({
+          user_id,
+          segment_id,
+          topic_id,
+          course_id
+        });
+      }
+      
+      // Get segment to check threshold_value
+      const [segmentData] = await pool.execute(
+        'SELECT threshold_value, topic_id FROM segments WHERE id = ?',
+        [segment_id]
+      );
+      const threshold_value = segmentData[0]?.threshold_value || 100;
+      const segmentTopicId = segmentData[0]?.topic_id;
+      
+      // Update media progress
+      const result = await LessonSubmission.updateMediaProgress(
+        user_id, 
+        segment_id, 
+        current_position, 
+        total_duration, 
+        threshold_value
+      );
+      
+      if (result) {
+        // Update all progress (segment -> topic -> course)
+        await ProgressService.updateLessonProgress(user_id, segment_id, result.progress_percentage, 0);
+      }
+      
+      // Get updated submission
+      const submission = await LessonSubmission.findByUserAndSegment(user_id, segment_id);
+      
+      res.json({
+        success: true,
+        message: 'Media progress updated',
+        submission,
+        threshold_value,
+        progress_percentage: result?.progress_percentage || 0,
+        is_complete: result?.status === 'completed'
+      });
+    } catch (error) {
+      console.error('Update media progress error:', error);
+      res.status(500).json({ error: 'Failed to update media progress' });
     }
   }
 
