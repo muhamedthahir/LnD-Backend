@@ -86,7 +86,7 @@ class SegmentController {
 
   static async create(req, res) {
     try {
-      const { topic_id, name, description, segment_type, order_index } = req.body;
+      const { topic_id, name, description, segment_type, order_index, threshold_value } = req.body;
       let content = req.body.content;
 
       // Parse content if it's a string (from FormData)
@@ -145,13 +145,23 @@ class SegmentController {
         }
       }
 
+      // Parse threshold_value - default to 100 for video/audio types
+      let thresholdVal = 100;
+      if (threshold_value !== undefined && threshold_value !== null && threshold_value !== '') {
+        thresholdVal = parseInt(threshold_value, 10);
+        if (isNaN(thresholdVal) || thresholdVal < 0 || thresholdVal > 100) {
+          thresholdVal = 100;
+        }
+      }
+
       const segmentId = await Segment.create({
         topic_id,
         name,
         description: description || '',
         segment_type,
         order_index: order_index || 0,
-        content: content || {}
+        content: content || {},
+        threshold_value: thresholdVal
       });
 
       const segment = await Segment.findById(segmentId);
@@ -210,7 +220,7 @@ class SegmentController {
     try {
       console.log('Updating segment');
       const { id } = req.params;
-      const { name, description, segment_type, order_index } = req.body;
+      const { name, description, segment_type, order_index, threshold_value } = req.body;
       let content = req.body.content;
       console.log('req.body ', req.body);
       // Parse content if it's a string (from FormData)
@@ -329,12 +339,22 @@ class SegmentController {
         }
       }
 
+      // Parse threshold_value if provided
+      let thresholdVal = undefined;
+      if (threshold_value !== undefined && threshold_value !== null && threshold_value !== '') {
+        thresholdVal = parseInt(threshold_value, 10);
+        if (isNaN(thresholdVal) || thresholdVal < 0 || thresholdVal > 100) {
+          thresholdVal = undefined; // Keep existing value if invalid
+        }
+      }
+
       await Segment.update(id, { 
         name: name || segment.name, 
         description: description !== undefined ? description : segment.description, 
         segment_type: effectiveSegmentType, 
         order_index: order_index !== undefined ? order_index : segment.order_index, 
-        content: content || segment.content 
+        content: content || segment.content,
+        threshold_value: thresholdVal
       });
       const updatedSegment = await Segment.findById(id);
       

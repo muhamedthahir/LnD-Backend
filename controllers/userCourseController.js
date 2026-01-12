@@ -29,7 +29,7 @@ class UserCourseController {
 
       // Update enrollment status if needed
       if (enrollment.status === 'invited') {
-        await Enrollment.updateStatus(enrollment.id, 'in_progress');
+        await Enrollment.updateStatus(enrollment.id, 'inProgress');
       }
 
       res.json({ 

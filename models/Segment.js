@@ -2,12 +2,14 @@ const pool = require('../config/db');
 
 class Segment {
   static async create(segmentData) {
-    const { topic_id, name, description, segment_type, order_index, content } = segmentData;
+    const { topic_id, name, description, segment_type, order_index, content, threshold_value } = segmentData;
     // Ensure content is properly stringified
     const contentJson = content ? (typeof content === 'string' ? content : JSON.stringify(content)) : JSON.stringify({});
+    // Default threshold_value to 100 if not provided
+    const thresholdVal = threshold_value !== undefined ? threshold_value : 100;
     const [result] = await pool.execute(
-      'INSERT INTO segments (topic_id, name, description, segment_type, order_index, content) VALUES (?, ?, ?, ?, ?, ?)',
-      [topic_id, name, description, segment_type, order_index, contentJson]
+      'INSERT INTO segments (topic_id, name, description, segment_type, order_index, content, threshold_value) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [topic_id, name, description, segment_type, order_index, contentJson, thresholdVal]
     );
     return result.insertId;
   }
@@ -55,13 +57,23 @@ class Segment {
   }
 
   static async update(id, segmentData) {
-    const { name, description, segment_type, order_index, content } = segmentData;
+    const { name, description, segment_type, order_index, content, threshold_value } = segmentData;
     // Ensure content is properly stringified
     const contentJson = content ? (typeof content === 'string' ? content : JSON.stringify(content)) : JSON.stringify({});
-    await pool.execute(
-      'UPDATE segments SET name = ?, description = ?, segment_type = ?, order_index = ?, content = ? WHERE id = ?',
-      [name, description, segment_type, order_index, contentJson, id]
-    );
+    
+    // Build dynamic update query
+    let query = 'UPDATE segments SET name = ?, description = ?, segment_type = ?, order_index = ?, content = ?';
+    const params = [name, description, segment_type, order_index, contentJson];
+    
+    if (threshold_value !== undefined) {
+      query += ', threshold_value = ?';
+      params.push(threshold_value);
+    }
+    
+    query += ' WHERE id = ?';
+    params.push(id);
+    
+    await pool.execute(query, params);
   }
 
   static async delete(id) {

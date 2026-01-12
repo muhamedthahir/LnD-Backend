@@ -10,6 +10,7 @@ class Course {
       course_outcomes, 
       status,
       thumbnail,
+      has_to_go_by_section,
       created_by 
     } = courseData;
     
@@ -22,8 +23,9 @@ class Course {
         course_outcomes, 
         status,
         thumbnail,
+        has_to_go_by_section,
         created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name, 
         category, 
@@ -32,6 +34,7 @@ class Course {
         course_outcomes, 
         status || 'draft',
         thumbnail || null,
+        has_to_go_by_section ? 1 : 0,
         created_by
       ]
     );
@@ -137,7 +140,8 @@ class Course {
       short_description, 
       course_outcomes, 
       status,
-      thumbnail
+      thumbnail,
+      has_to_go_by_section
     } = courseData;
     
     const updates = [];
@@ -170,6 +174,10 @@ class Course {
     if (thumbnail !== undefined) {
       updates.push('thumbnail = ?');
       values.push(thumbnail);
+    }
+    if (has_to_go_by_section !== undefined) {
+      updates.push('has_to_go_by_section = ?');
+      values.push(has_to_go_by_section ? 1 : 0);
     }
     
     if (updates.length === 0) {

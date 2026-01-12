@@ -30,6 +30,7 @@ class Enrollment {
 
   static async findByStudentId(student_id, status = null) {
     // Handle both course_id enrollments and administration_id enrollments
+    // Also include progress data from user_courses table
     let query = `SELECT 
       e.*,
       COALESCE(c.id, ca.course_id) as course_id,
@@ -39,12 +40,17 @@ class Enrollment {
       COALESCE(c.competency_level, c2.competency_level) as competency_level,
       COALESCE(c.status, c2.status) as course_status,
       COALESCE(c.thumbnail, c2.thumbnail) as thumbnail,
+      COALESCE(c.has_to_go_by_section, c2.has_to_go_by_section, 0) as has_to_go_by_section,
       ca.start_date,
-      ca.end_date
+      ca.end_date,
+      uc.progress_percentage,
+      uc.status as user_course_status,
+      uc.last_accessed_at
     FROM enrollments e
     LEFT JOIN courses c ON e.course_id = c.id
     LEFT JOIN course_administrations ca ON e.administration_id = ca.id
     LEFT JOIN courses c2 ON ca.course_id = c2.id
+    LEFT JOIN user_courses uc ON uc.user_id = e.student_id AND uc.course_id = COALESCE(c.id, ca.course_id)
     WHERE e.student_id = ? AND (e.course_id IS NOT NULL OR e.administration_id IS NOT NULL)`;
     const params = [student_id];
     
