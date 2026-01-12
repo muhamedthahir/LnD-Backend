@@ -216,6 +216,39 @@ class GroupController {
         }
       }
 
+      // After all users are added, automatically enroll them in courses linked to this group
+      if (createdUsers.length > 0) {
+        const Enrollment = require('../models/Enrollment');
+        const pool = require('../config/db');
+        
+        // Find all published administrations where multiple members of this group are enrolled
+        const [administrations] = await pool.execute(
+          `SELECT ca.id, ca.course_id, ca.status, COUNT(DISTINCT e.student_id) as group_member_count
+           FROM course_administrations ca
+           INNER JOIN enrollments e ON e.administration_id = ca.id
+           INNER JOIN group_members gm ON e.student_id = gm.user_id AND gm.group_id = ?
+           WHERE ca.status = 'published'
+           GROUP BY ca.id, ca.course_id, ca.status
+           HAVING group_member_count >= 2`,
+          [group_id]
+        );
+
+        // Enroll all new users in these administrations
+        for (const user of createdUsers) {
+          for (const admin of administrations) {
+            const existingEnrollment = await Enrollment.checkCourseEnrollment(user.id, admin.course_id);
+            if (!existingEnrollment) {
+              await Enrollment.create({
+                user_id: user.id,
+                administration_id: admin.id,
+                status: 'invited'
+              });
+              console.log(`Auto-enrolled user ${user.id} in administration ${admin.id} (course ${admin.course_id}) after bulk upload to group ${group_id}`);
+            }
+          }
+        }
+      }
+
       res.json({
         message: 'Students uploaded successfully',
         created: createdUsers.length,
@@ -256,13 +289,80 @@ class GroupController {
     try {
       const { id } = req.params;
       const { addUserIds = [], removeUserIds = [] } = req.body;
+      const Enrollment = require('../models/Enrollment');
+      const pool = require('../config/db');
 
+      // Add new members to group
       if (addUserIds.length > 0) {
         await Group.addMembers(id, addUserIds);
+        
+        // Automatically enroll new members in courses linked to this group
+        // Find all published administrations where multiple members of this group are enrolled
+        // This indicates the group was selected for that administration
+        const [administrations] = await pool.execute(
+          `SELECT ca.id, ca.course_id, ca.status, COUNT(DISTINCT e.student_id) as group_member_count
+           FROM course_administrations ca
+           INNER JOIN enrollments e ON e.administration_id = ca.id
+           INNER JOIN group_members gm ON e.student_id = gm.user_id AND gm.group_id = ?
+           WHERE ca.status = 'published'
+           GROUP BY ca.id, ca.course_id, ca.status
+           HAVING group_member_count >= 2`,
+          [id]
+        );
+
+        // For each administration, enroll the new users
+        for (const admin of administrations) {
+          for (const userId of addUserIds) {
+            // Check if user is already enrolled in this course through any administration
+            const existingEnrollment = await Enrollment.checkCourseEnrollment(userId, admin.course_id);
+            if (!existingEnrollment) {
+              // Create new enrollment
+              await Enrollment.create({
+                user_id: userId,
+                administration_id: admin.id,
+                status: 'invited'
+              });
+              console.log(`Auto-enrolled user ${userId} in administration ${admin.id} (course ${admin.course_id}) after adding to group ${id}`);
+            }
+          }
+        }
       }
 
+      // Remove members from group
       if (removeUserIds.length > 0) {
+        // First, find all administrations linked to this group before removing members
+        const [administrations] = await pool.execute(
+          `SELECT DISTINCT ca.id, ca.course_id
+           FROM course_administrations ca
+           INNER JOIN enrollments e ON e.administration_id = ca.id
+           INNER JOIN group_members gm ON e.student_id = gm.user_id AND gm.group_id = ?
+           GROUP BY ca.id, ca.course_id
+           HAVING COUNT(DISTINCT e.student_id) >= 2`,
+          [id]
+        );
+
+        // Remove members from group
         await Group.removeMembers(id, removeUserIds);
+        
+        // Mark enrollments as expired for removed users
+        // For each removed user, mark their enrollments from this group's administrations as expired
+        for (const userId of removeUserIds) {
+          for (const admin of administrations) {
+            // Find enrollment for this user and administration
+            const [enrollments] = await pool.execute(
+              `SELECT id FROM enrollments 
+               WHERE student_id = ? AND administration_id = ? 
+               AND status != 'Expired'`,
+              [userId, admin.id]
+            );
+            
+            // Mark as expired
+            for (const enrollment of enrollments) {
+              await Enrollment.updateStatus(enrollment.id, 'Expired');
+              console.log(`Marked enrollment ${enrollment.id} as expired for user ${userId} after removal from group ${id}`);
+            }
+          }
+        }
       }
 
       const members = await Group.getMembers(id);
