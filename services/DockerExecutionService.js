@@ -22,25 +22,25 @@ class DockerExecutionService extends EventEmitter {
   }
 
   /**
-   * Language to Docker image mapping (Piston images)
+   * Language to Docker image mapping (standard Docker Hub images)
    */
   getDockerImage(language) {
     const imageMap = {
-      'python': 'ghcr.io/engineer-man/piston-python:3.10.0',
-      'javascript': 'ghcr.io/engineer-man/piston-node:18.15.0',
-      'node': 'ghcr.io/engineer-man/piston-node:18.15.0',
-      'java': 'ghcr.io/engineer-man/piston-java:15.0.2',
-      'c': 'ghcr.io/engineer-man/piston-gcc:10.2.0',
-      'cpp': 'ghcr.io/engineer-man/piston-gcc:10.2.0',
-      'c++': 'ghcr.io/engineer-man/piston-gcc:10.2.0',
-      'typescript': 'ghcr.io/engineer-man/piston-typescript:5.0.3',
-      'go': 'ghcr.io/engineer-man/piston-go:1.16.2',
-      'rust': 'ghcr.io/engineer-man/piston-rust:1.68.2',
-      'ruby': 'ghcr.io/engineer-man/piston-ruby:3.0.1',
-      'php': 'ghcr.io/engineer-man/piston-php:8.2.3',
-      'csharp': 'ghcr.io/engineer-man/piston-mono:6.12.0',
+      'python': 'python:3.10-slim',
+      'javascript': 'node:18-slim',
+      'node': 'node:18-slim',
+      'java': 'eclipse-temurin:17-jdk',
+      'c': 'gcc:12',
+      'cpp': 'gcc:12',
+      'c++': 'gcc:12',
+      'typescript': 'node:18-slim',
+      'go': 'golang:1.21-alpine',
+      'rust': 'rust:1.70-slim',
+      'ruby': 'ruby:3.2-slim',
+      'php': 'php:8.2-cli',
+      'csharp': 'mono:6.12',
     };
-    return imageMap[language.toLowerCase()] || 'ghcr.io/engineer-man/piston-python:3.10.0';
+    return imageMap[language.toLowerCase()] || 'python:3.10-slim';
   }
 
   /**
@@ -51,7 +51,7 @@ class DockerExecutionService extends EventEmitter {
       'python': { 
         ext: '.py', 
         compile: null, 
-        run: 'python3 {file}',
+        run: 'python {file}',
         fileName: 'main.py'
       },
       'javascript': { 
@@ -92,7 +92,7 @@ class DockerExecutionService extends EventEmitter {
       },
       'typescript': { 
         ext: '.ts', 
-        compile: 'tsc {file}', 
+        compile: 'npx tsc {file}', 
         run: 'node {fileNoExt}.js',
         fileName: 'main.ts'
       },
