@@ -1,6 +1,10 @@
 // app.js
 const express = require('express');
+const http = require('http');
 require('./config/db.js'); // Initialize database connection
+
+// Import WebSocket server for interactive code execution
+const WebSocketServer = require('./services/WebSocketServer');
 
 // Initialize database tables
 const CourseAdministration = require('./models/CourseAdministration');
@@ -142,8 +146,22 @@ app.use((req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+
+// Create HTTP server
+const server = http.createServer(app);
+
+// Initialize WebSocket server for interactive code execution
+WebSocketServer.initialize(server);
+WebSocketServer.startHeartbeat();
+
+// Add WebSocket status endpoint
+app.get('/ws/status', (req, res) => {
+  res.json(WebSocketServer.getStatus());
+});
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`WebSocket: ws://localhost:${PORT}/ws/code-execute`);
 });
 

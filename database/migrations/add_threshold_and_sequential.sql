@@ -18,3 +18,4 @@ UPDATE segments SET threshold_value = 100 WHERE threshold_value IS NULL;
 UPDATE courses SET has_to_go_by_section = FALSE WHERE has_to_go_by_section IS NULL;
 
 
+
