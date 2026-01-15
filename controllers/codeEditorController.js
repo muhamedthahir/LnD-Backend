@@ -61,7 +61,7 @@ const executeCode = async (req, res) => {
       run_memory_limit: -1
     };
 
-    console.log(`Executing ${language} code via Piston API at ${pistonEndpoint}`);
+    console.log(`Executing ${language} code via Piston API at ${pistonEndpoint} with payload: ${JSON.stringify(pistonPayload)}`);
 
     // Make request to Piston API
     const response = await fetch(pistonEndpoint, {
