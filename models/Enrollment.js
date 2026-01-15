@@ -45,7 +45,8 @@ class Enrollment {
       ca.end_date,
       uc.progress_percentage,
       uc.status as user_course_status,
-      uc.last_accessed_at
+      uc.last_accessed_at,
+      uc.started_at
     FROM enrollments e
     LEFT JOIN courses c ON e.course_id = c.id
     LEFT JOIN course_administrations ca ON e.administration_id = ca.id
