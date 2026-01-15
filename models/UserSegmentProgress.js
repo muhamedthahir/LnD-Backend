@@ -102,13 +102,16 @@ class UserSegmentProgress {
     const existing = await this.findByUserAndSegment(user_id, segment_id);
     
     if (existing) {
+      // Cap progress at 100%
+      const cappedProgress = Math.min(progress_percentage, 100);
+      
       let status = existing.status;
       let completed_at = existing.completed_at;
       
-      if (progress_percentage >= 100) {
+      if (cappedProgress >= 100) {
         status = 'completed';
         completed_at = completed_at || new Date();
-      } else if (progress_percentage > 0) {
+      } else if (cappedProgress > 0) {
         status = 'in_progress';
       }
       
@@ -123,7 +126,7 @@ class UserSegmentProgress {
            completed_at = ?,
            last_updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [status, progress_percentage, progress_percentage, time_spent_seconds, completed_at, existing.id]
+        [status, cappedProgress, cappedProgress, time_spent_seconds, completed_at, existing.id]
       );
     }
   }
@@ -138,11 +141,16 @@ class UserSegmentProgress {
     
     // Calculate combined progress
     const totalItems = (programmingProgress?.total || 0) + (mcqProgress?.total || 0);
-    const completedItems = (programmingProgress?.completed || 0) + (mcqProgress?.completed || 0);
+    // Cap completed items at total items to prevent >100% progress
+    const completedItems = Math.min(
+      (programmingProgress?.completed || 0) + (mcqProgress?.completed || 0),
+      totalItems
+    );
     const totalScore = (programmingProgress?.score || 0) + (mcqProgress?.score || 0);
     const maxScore = (programmingProgress?.maxScore || 0) + (mcqProgress?.maxScore || 0);
     
-    const progress_percentage = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+    // Calculate progress and cap at 100%
+    const progress_percentage = totalItems > 0 ? Math.min(Math.round((completedItems / totalItems) * 100), 100) : 0;
     
     let status = existing.status;
     let completed_at = existing.completed_at;

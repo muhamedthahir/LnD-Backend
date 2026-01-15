@@ -113,18 +113,19 @@ class ProgressService {
       [practice_segment_id]
     );
     
-    // Calculate combined progress
+    // Calculate combined progress - count attempted items as completed for progress
+    // This means any submission (even wrong answers) counts towards progress percentage
     const programmingData = {
       total: progTotal[0]?.count || 0,
-      completed: progProgress?.successful || 0,
-      score: 0, // Calculate based on your scoring logic
+      completed: progProgress?.total_attempted || 0,  // Count all attempted, not just successful
+      score: progProgress?.avg_best_score || 0,
       maxScore: (progTotal[0]?.count || 0) * 100
     };
     
     const mcqData = {
       total: mcqTotal[0]?.count || 0,
-      completed: mcqProgress?.correct || 0,
-      score: 0,
+      completed: mcqProgress?.total_attempted || 0,  // Count all attempted, not just correct
+      score: mcqProgress?.avg_best_score || 0,
       maxScore: (mcqTotal[0]?.count || 0) * 100
     };
     

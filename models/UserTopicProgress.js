@@ -111,7 +111,7 @@ class UserTopicProgress {
     if (total > 0) {
       // Sum of all progress: tracked segments' total progress + untracked segments (0%)
       const totalProgress = (summary?.avg_progress || 0) * trackedSegments;
-      progress_percentage = Math.round(totalProgress / total);
+      progress_percentage = Math.min(Math.round(totalProgress / total), 100); // Cap at 100%
     }
     
     await this.createOrUpdate({
@@ -200,7 +200,7 @@ class UserTopicProgress {
     if (total > 0) {
       // Sum of all progress: tracked topics' total progress + untracked topics (0%)
       const totalProgress = (summary?.avg_progress || 0) * trackedTopics;
-      progress_percentage = Math.round(totalProgress / total);
+      progress_percentage = Math.min(Math.round(totalProgress / total), 100); // Cap at 100%
     }
     
     // Determine status
