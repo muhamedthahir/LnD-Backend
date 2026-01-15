@@ -207,13 +207,19 @@ class ProgressService {
       [user_id, course_id]
     );
     
+    const progressPercentage = userCourse[0]?.progress_percentage || 0;
+    const status = userCourse[0]?.status || 'not_started';
+    
     return {
       course_id,
       user_id,
-      overall_progress: userCourse[0]?.progress_percentage || 0,
-      overall_status: userCourse[0]?.status || 'not_started',
+      // Include both naming conventions for compatibility
+      overall_progress: progressPercentage,
+      overall_status: status,
+      progress_percentage: progressPercentage,
+      status: status,
       topics_completed: courseProgress?.completed_topics || 0,
-      topics_total: courseProgress?.total_topics || 0,
+      topics_total: topics.length, // Use actual topics count from query
       total_time_spent: courseProgress?.total_time_spent || 0,
       topics
     };

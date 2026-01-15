@@ -87,6 +87,7 @@ class UserTopicProgress {
 
   /**
    * Recalculate topic progress from segment progress
+   * Uses average progress percentage across all segments for more accurate tracking
    */
   static async recalculateFromSegments(user_id, topic_id, course_id) {
     // Get segment progress summary
@@ -102,7 +103,16 @@ class UserTopicProgress {
     
     const total = totalSegments[0]?.total || 0;
     const completed = summary?.completed_segments || 0;
-    const progress_percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const trackedSegments = summary?.total_segments || 0;
+    
+    // Calculate progress based on average progress of tracked segments
+    // Also factor in segments that haven't been started yet (count as 0%)
+    let progress_percentage = 0;
+    if (total > 0) {
+      // Sum of all progress: tracked segments' total progress + untracked segments (0%)
+      const totalProgress = (summary?.avg_progress || 0) * trackedSegments;
+      progress_percentage = Math.round(totalProgress / total);
+    }
     
     await this.createOrUpdate({
       user_id,
@@ -169,6 +179,7 @@ class UserTopicProgress {
 
   /**
    * Recalculate and update course progress
+   * Uses average progress across all topics for accurate course progress tracking
    */
   static async updateCourseProgress(user_id, course_id) {
     const summary = await this.getCourseProgressSummary(user_id, course_id);
@@ -181,27 +192,53 @@ class UserTopicProgress {
     
     const total = totalTopics[0]?.total || 0;
     const completed = summary?.completed_topics || 0;
-    const progress_percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const trackedTopics = summary?.total_topics || 0;
+    
+    // Calculate progress based on average progress of tracked topics
+    // Factor in topics that haven't been started yet (count as 0%)
+    let progress_percentage = 0;
+    if (total > 0) {
+      // Sum of all progress: tracked topics' total progress + untracked topics (0%)
+      const totalProgress = (summary?.avg_progress || 0) * trackedTopics;
+      progress_percentage = Math.round(totalProgress / total);
+    }
     
     // Determine status
     let status = 'not_started';
-    if (progress_percentage >= 100) {
+    if (progress_percentage >= 100 || (completed === total && total > 0)) {
       status = 'completed';
+      progress_percentage = 100;
     } else if (progress_percentage > 0 || summary?.in_progress_topics > 0) {
       status = 'in_progress';
     }
     
-    // Update user_courses table
-    await pool.execute(
-      `UPDATE user_courses SET
-         status = ?,
-         progress_percentage = ?,
-         last_accessed_at = CURRENT_TIMESTAMP,
-         completed_at = CASE WHEN ? = 'completed' AND completed_at IS NULL THEN CURRENT_TIMESTAMP ELSE completed_at END,
-         updated_at = CURRENT_TIMESTAMP
-       WHERE user_id = ? AND course_id = ?`,
-      [status, progress_percentage, status, user_id, course_id]
+    // Check if user_courses record exists
+    const [existingRecord] = await pool.execute(
+      'SELECT id FROM user_courses WHERE user_id = ? AND course_id = ?',
+      [user_id, course_id]
     );
+    
+    if (existingRecord.length > 0) {
+      // Update existing record
+      await pool.execute(
+        `UPDATE user_courses SET
+           status = ?,
+           progress_percentage = ?,
+           last_accessed_at = CURRENT_TIMESTAMP,
+           started_at = CASE WHEN started_at IS NULL AND ? > 0 THEN CURRENT_TIMESTAMP ELSE started_at END,
+           completed_at = CASE WHEN ? = 'completed' AND completed_at IS NULL THEN CURRENT_TIMESTAMP ELSE completed_at END,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ? AND course_id = ?`,
+        [status, progress_percentage, progress_percentage, status, user_id, course_id]
+      );
+    } else {
+      // Create new record
+      await pool.execute(
+        `INSERT INTO user_courses (user_id, course_id, status, progress_percentage, started_at, last_accessed_at)
+         VALUES (?, ?, ?, ?, CASE WHEN ? > 0 THEN CURRENT_TIMESTAMP ELSE NULL END, CURRENT_TIMESTAMP)`,
+        [user_id, course_id, status, progress_percentage, progress_percentage]
+      );
+    }
     
     return { status, progress_percentage };
   }
