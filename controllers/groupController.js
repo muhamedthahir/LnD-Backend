@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const XLSX = require('xlsx');
 const multer = require('multer');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
-// const { sendOTPEmail } = require('../utils/emailService'); // COMMENTED OUT FOR TESTING
+const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -193,14 +193,17 @@ class GroupController {
             });
             user = await User.findById(userId);
 
-            // Send OTP email - COMMENTED OUT FOR TESTING
-            // try {
-            //   await sendOTPEmail(email, name, otp);
-            // } catch (emailError) {
-            //   console.error(`Failed to send OTP email to ${email}:`, emailError);
-            // }
+            // Send OTP email using AWS SES and USER_INVITE template
+            try {
+              const emailResult = await sendOTPEmailWithTemplate(email, name, otp, req.user?.id);
+              if (!emailResult.success) {
+                console.error(`Failed to send OTP email to ${email}:`, emailResult.error);
+              }
+            } catch (emailError) {
+              console.error(`Failed to send OTP email to ${email}:`, emailError);
+            }
             
-            // Log OTP to console for testing
+            // Also log OTP to console for development
             console.log(`\n[OTP GENERATED] User: ${name} (${email}) - OTP: ${otp}\n`);
           }
 

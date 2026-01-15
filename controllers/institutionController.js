@@ -3,6 +3,7 @@ const User = require('../models/User');
 const pool = require('../config/db');
 const bcrypt = require('bcrypt');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
+const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
 
 class InstitutionController {
   static async getInstitutions(req, res) {
@@ -100,13 +101,23 @@ class InstitutionController {
           otp_expires_at: otpExpiresAt
         });
 
-        // Log OTP to console for testing
+        // Send OTP email using AWS SES and USER_INVITE template
+        try {
+          const emailResult = await sendOTPEmailWithTemplate(admin_email, admin_name, otp, req.user?.id);
+          if (!emailResult.success) {
+            console.error(`Failed to send OTP email to ${admin_email}:`, emailResult.error);
+          }
+        } catch (emailError) {
+          console.error(`Failed to send OTP email to ${admin_email}:`, emailError);
+        }
+
+        // Also log OTP to console for development
         console.log('\n========================================');
         console.log(`[OTP GENERATED] College Admin: ${admin_name} (${admin_email})`);
         console.log(`Institution: ${name}`);
         console.log(`OTP: ${otp}`);
         console.log(`Valid for 7 days`);
-        console.log(`========================================\n`);
+        console.log('========================================\n');
       }
 
       const institution = await Institution.findById(institutionId);
@@ -173,13 +184,23 @@ class InstitutionController {
             otp_expires_at: otpExpiresAt
           });
 
-          // Log OTP to console for testing
+          // Send OTP email using AWS SES and USER_INVITE template
+          try {
+            const emailResult = await sendOTPEmailWithTemplate(admin_email, admin_name, otp, req.user?.id);
+            if (!emailResult.success) {
+              console.error(`Failed to send OTP email to ${admin_email}:`, emailResult.error);
+            }
+          } catch (emailError) {
+            console.error(`Failed to send OTP email to ${admin_email}:`, emailError);
+          }
+
+          // Also log OTP to console for development
           console.log('\n========================================');
           console.log(`[OTP GENERATED] College Admin: ${admin_name} (${admin_email})`);
           console.log(`Institution: ${name}`);
           console.log(`OTP: ${otp}`);
           console.log(`Valid for 7 days`);
-          console.log(`========================================\n`);
+          console.log('========================================\n');
         }
       }
 

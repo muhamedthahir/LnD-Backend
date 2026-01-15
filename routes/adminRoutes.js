@@ -11,6 +11,7 @@ router.post('/users', authenticate, authorize('primary_admin', 'college_admin'),
 router.put('/users/:id', authenticate, authorize('primary_admin', 'college_admin'), AdminController.updateUser);
 router.delete('/users/:id', authenticate, authorize('primary_admin', 'college_admin'), AdminController.deleteUser);
 router.put('/users/:id/reset-password', authenticate, authorize('primary_admin', 'college_admin'), AdminController.resetPassword);
+router.post('/users/:id/resend-otp', authenticate, authorize('primary_admin', 'college_admin'), AdminController.resendOTP);
 router.get('/users/bulk/template', authenticate, authorize('primary_admin', 'college_admin'), AdminController.downloadBulkUserTemplate);
 router.post('/users/bulk/upload', authenticate, authorize('primary_admin', 'college_admin'), AdminController.upload, AdminController.uploadBulkUsers);
 

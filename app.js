@@ -17,6 +17,11 @@ UserCourse.createTable().catch(err => {
   console.error('Error creating user courses table:', err);
 });
 
+const MailerTemplate = require('./models/MailerTemplate');
+MailerTemplate.createTable().catch(err => {
+  console.error('Error creating mailer templates table:', err);
+});
+
 const app = express();   
 
 // CORS middleware - MUST be before other middleware
@@ -96,6 +101,9 @@ app.use('/api/practice-segments', require('./routes/practiceSegmentRoutes'));
 
 // Submission routes
 app.use('/api/submissions', require('./routes/submissionRoutes'));
+
+// Mailer Template routes
+app.use('/api/mailer-templates', require('./routes/mailerTemplateRoutes'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {

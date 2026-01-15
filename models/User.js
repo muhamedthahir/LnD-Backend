@@ -62,6 +62,19 @@ class User {
     );
   }
 
+  static async updateOTP(userId, otp, otpExpiresAt) {
+    try {
+      const [result] = await pool.execute(
+        'UPDATE users SET otp = ?, otp_expires_at = ? WHERE id = ?',
+        [otp, otpExpiresAt, userId]
+      );
+      return result.affectedRows > 0;
+    } catch (error) {
+      console.error('Error updating OTP:', error);
+      throw error;
+    }
+  }
+
   static async findByEmail(email) {
     try {
       // Try to select all columns, but handle missing columns gracefully

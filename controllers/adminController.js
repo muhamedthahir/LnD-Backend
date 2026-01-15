@@ -4,7 +4,7 @@ const pool = require('../config/db');
 const XLSX = require('xlsx');
 const multer = require('multer');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
-// const { sendOTPEmail } = require('../utils/emailService'); // COMMENTED OUT FOR TESTING
+const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -108,19 +108,24 @@ class AdminController {
         otp_expires_at: otpExpiresAt
       });
 
-      // Send OTP email - COMMENTED OUT FOR TESTING
-      // try {
-      //   await sendOTPEmail(email, name, otp);
-      // } catch (emailError) {
-      //   console.error('Failed to send OTP email:', emailError);
-      // }
+      // Send OTP email using AWS SES and USER_INVITE template
+      try {
+        const emailResult = await sendOTPEmailWithTemplate(email, name, otp, req.user?.id);
+        if (emailResult.success) {
+          console.log(`OTP email sent successfully to ${email}`);
+        } else {
+          console.error(`Failed to send OTP email to ${email}:`, emailResult.error);
+        }
+      } catch (emailError) {
+        console.error('Failed to send OTP email:', emailError);
+      }
       
-      // Log OTP to console for testing
+      // Also log OTP to console for development
       console.log('\n========================================');
       console.log(`[OTP GENERATED] User: ${name} (${email})`);
       console.log(`OTP: ${otp}`);
       console.log(`Valid for 7 days`);
-      console.log(`========================================\n`);
+      console.log('========================================\n');
 
       // Get created user
       const user = await User.findById(userId);
@@ -348,14 +353,17 @@ class AdminController {
           
           const user = await User.findById(userId);
 
-          // Send OTP email - COMMENTED OUT FOR TESTING
-          // try {
-          //   await sendOTPEmail(email, name, otp);
-          // } catch (emailError) {
-          //   console.error(`Failed to send OTP email to ${email}:`, emailError);
-          // }
+          // Send OTP email using AWS SES and USER_INVITE template
+          try {
+            const emailResult = await sendOTPEmailWithTemplate(email, name, otp, req.user?.id);
+            if (!emailResult.success) {
+              console.error(`Failed to send OTP email to ${email}:`, emailResult.error);
+            }
+          } catch (emailError) {
+            console.error(`Failed to send OTP email to ${email}:`, emailError);
+          }
           
-          // Log OTP to console for testing
+          // Also log OTP to console for development
           console.log(`\n[OTP GENERATED] User: ${name} (${email}) - OTP: ${otp}\n`);
           
           createdUsers.push({
@@ -384,6 +392,58 @@ class AdminController {
       });
     } catch (error) {
       console.error('Upload bulk users error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+  static async resendOTP(req, res) {
+    try {
+      const { id } = req.params;
+
+      // Find the user
+      const user = await User.findById(id);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // Check if user already has password set
+      if (user.password_set) {
+        return res.status(400).json({ 
+          error: 'User has already set their password. OTP resend is not applicable.' 
+        });
+      }
+
+      // Generate new OTP
+      const otp = generateOTP();
+      const otpExpiresAt = getOTPExpiration();
+
+      // Update OTP in database
+      await User.updateOTP(id, otp, otpExpiresAt);
+
+      // Send OTP email using AWS SES and USER_INVITE template
+      try {
+        const emailResult = await sendOTPEmailWithTemplate(user.email, user.name, otp, req.user?.id);
+        if (emailResult.success) {
+          console.log(`OTP email resent successfully to ${user.email}`);
+        } else {
+          console.error(`Failed to resend OTP email to ${user.email}:`, emailResult.error);
+        }
+      } catch (emailError) {
+        console.error('Failed to resend OTP email:', emailError);
+      }
+
+      // Log OTP to console for development
+      console.log('\n========================================');
+      console.log(`[OTP RESENT] User: ${user.name} (${user.email})`);
+      console.log(`New OTP: ${otp}`);
+      console.log(`Valid for 7 days`);
+      console.log('========================================\n');
+
+      res.json({
+        message: 'OTP has been resent successfully',
+        otp: process.env.NODE_ENV === 'development' ? otp : undefined
+      });
+    } catch (error) {
+      console.error('Resend OTP error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   }
