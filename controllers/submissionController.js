@@ -330,20 +330,31 @@ class SubmissionController {
         });
       }
       
-      // Get correct options for this question
-      const [questionData] = await pool.execute(
-        `SELECT mq.correct_options 
-         FROM mcq_multi_select_questions mq 
-         WHERE mq.question_id = ?`,
+      // Get MCQ question record
+      const [mcqQuestionData] = await pool.execute(
+        `SELECT mcq.id as mcq_id, mcq.is_multi_select, q.points
+         FROM mcq_multiselect_questions mcq 
+         JOIN questions q ON mcq.question_id = q.id
+         WHERE mcq.question_id = ?`,
         [mcq_question_id]
       );
       
       let correct_options = [];
       let is_correct = false;
       let score = 0;
+      let maxScore = 100;
       
-      if (questionData.length > 0) {
-        correct_options = JSON.parse(questionData[0].correct_options || '[]');
+      if (mcqQuestionData.length > 0) {
+        const mcqId = mcqQuestionData[0].mcq_id;
+        maxScore = mcqQuestionData[0].points || 100;
+        
+        // Get correct options from the options table
+        const [correctOptionsData] = await pool.execute(
+          `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
+          [mcqId]
+        );
+        
+        correct_options = correctOptionsData.map(opt => opt.id);
         
         // Check if answer is correct
         const selectedSet = new Set(selected_options);
@@ -352,7 +363,8 @@ class SubmissionController {
         is_correct = selectedSet.size === correctSet.size && 
                      [...selectedSet].every(opt => correctSet.has(opt));
         
-        score = is_correct ? 100 : 0;
+        // Calculate score (full score if correct, 0 if incorrect)
+        score = is_correct ? maxScore : 0;
       }
       
       // Create or update MCQ submission
@@ -365,11 +377,27 @@ class SubmissionController {
         correct_options,
         is_correct,
         score,
+        max_score: maxScore,
         time_spent_seconds
       });
       
       // Update progress
       await ProgressService.updateMCQProgress(user_id, practice_segment_id);
+      
+      // Calculate and update overall quiz statistics
+      const quizStats = await MCQSubmission.getPracticeSegmentProgress(user_id, practice_segment_id);
+      
+      // Get total questions in practice segment
+      const [totalQuestionsData] = await pool.execute(
+        `SELECT COUNT(*) as total FROM practice_segment_mcq_questions WHERE practice_segment_id = ?`,
+        [practice_segment_id]
+      );
+      const totalQuestions = totalQuestionsData[0]?.total || 0;
+      
+      // Calculate percentage
+      const percentage = totalQuestions > 0 
+        ? Math.round((quizStats.correct / totalQuestions) * 100) 
+        : 0;
       
       // Get updated submission
       const submission = await MCQSubmission.findByUserAndQuestion(user_id, mcq_question_id);
@@ -381,7 +409,15 @@ class SubmissionController {
         result: {
           is_correct,
           score,
+          max_score: maxScore,
           correct_options // Send back for feedback
+        },
+        quizProgress: {
+          totalQuestions,
+          totalAttempted: quizStats.total_attempted,
+          totalCorrect: quizStats.correct,
+          percentage,
+          averageScore: quizStats.avg_best_score
         }
       });
     } catch (error) {

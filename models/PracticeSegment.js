@@ -138,7 +138,7 @@ class PracticeSegment {
   }
 
   /**
-   * Get MCQ questions for a practice segment
+   * Get MCQ questions for a practice segment with options
    */
   static async getMcqQuestions(practiceSegmentId) {
     const [rows] = await pool.execute(
@@ -147,17 +147,39 @@ class PracticeSegment {
               qt.name as question_type_name,
               l.name as level_name,
               s.name as status_name,
-              qb.name as question_bank_name
+              qb.name as question_bank_name,
+              mcq.id as mcq_question_id,
+              mcq.is_multi_select,
+              mcq.min_select_required,
+              mcq.max_select_allowed
        FROM practice_segment_mcq_questions psmq
        INNER JOIN questions q ON psmq.question_id = q.id
        LEFT JOIN question_types qt ON q.question_type_id = qt.id
        LEFT JOIN levels l ON q.level_id = l.id
        LEFT JOIN statuses s ON q.status_id = s.id
        LEFT JOIN question_banks qb ON q.question_bank_id = qb.id
+       LEFT JOIN mcq_multiselect_questions mcq ON mcq.question_id = q.id
        WHERE psmq.practice_segment_id = ?
        ORDER BY psmq.order_index`,
       [practiceSegmentId]
     );
+    
+    // Fetch options for each MCQ question
+    for (const question of rows) {
+      if (question.mcq_question_id) {
+        const [options] = await pool.execute(
+          `SELECT id, text, is_correct, \`order\`, explanation 
+           FROM options 
+           WHERE mcq_multiselect_question_id = ? 
+           ORDER BY \`order\` ASC`,
+          [question.mcq_question_id]
+        );
+        question.options = options;
+      } else {
+        question.options = [];
+      }
+    }
+    
     return rows;
   }
 
