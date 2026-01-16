@@ -59,7 +59,7 @@ class Course {
     const finalLimit = (isNaN(limitInt) || limitInt < 1) ? 50 : limitInt;
     const finalOffset = (isNaN(offsetInt) || offsetInt < 0) ? 0 : offsetInt;
 
-    let query = 'SELECT c.*, u.name as creator_name FROM courses c LEFT JOIN users u ON c.created_by = u.id WHERE 1=1';
+    let query = 'SELECT c.*, u.name as creator_name, u.college_name as creator_college FROM courses c LEFT JOIN users u ON c.created_by = u.id WHERE 1=1';
     const params = [];
 
     if (filters.search) {
@@ -77,6 +77,12 @@ class Course {
     if (filters.status) {
       query += ' AND c.status = ?';
       params.push(filters.status);
+    }
+
+    // Filter by creator's college/institution
+    if (filters.college_name) {
+      query += ' AND u.college_name = ?';
+      params.push(filters.college_name);
     }
 
     // MySQL doesn't support placeholders for LIMIT and OFFSET in some versions
@@ -100,7 +106,7 @@ class Course {
   }
 
   static async getCount(filters = {}) {
-    let query = 'SELECT COUNT(*) as count FROM courses c WHERE 1=1';
+    let query = 'SELECT COUNT(*) as count FROM courses c LEFT JOIN users u ON c.created_by = u.id WHERE 1=1';
     const params = [];
 
     if (filters.search) {
@@ -116,6 +122,12 @@ class Course {
     if (filters.status) {
       query += ' AND c.status = ?';
       params.push(filters.status);
+    }
+
+    // Filter by creator's college/institution
+    if (filters.college_name) {
+      query += ' AND u.college_name = ?';
+      params.push(filters.college_name);
     }
 
     try {

@@ -1,7 +1,17 @@
 const Course = require('../models/Course');
 const Enrollment = require('../models/Enrollment');
+const pool = require('../config/db');
 
 class CourseController {
+  // Helper to get creator's college name for a course
+  static async getCourseCreatorCollege(courseId) {
+    const [rows] = await pool.execute(
+      'SELECT u.college_name FROM courses c JOIN users u ON c.created_by = u.id WHERE c.id = ?',
+      [courseId]
+    );
+    return rows[0] ? rows[0].college_name : null;
+  }
+
   static async create(req, res) {
     try {
       const { 
@@ -41,6 +51,7 @@ class CourseController {
 
   static async getAll(req, res) {
     try {
+      const currentUser = req.user;
       const page = parseInt(req.query.page, 10) || 1;
       const pageSize = parseInt(req.query.pageSize, 10) || 10;
       const search = req.query.search || '';
@@ -54,8 +65,16 @@ class CourseController {
       const limit = validPageSize;
       const offset = (validPage - 1) * validPageSize;
       
-      const courses = await Course.getAll(limit, offset, { search, category, status });
-      const totalCount = await Course.getCount({ search, category, status });
+      // Build filters
+      const filters = { search, category, status };
+      
+      // college_admin can only see courses created by users from their institution
+      if (currentUser.role === 'college_admin') {
+        filters.college_name = currentUser.college_name;
+      }
+      
+      const courses = await Course.getAll(limit, offset, filters);
+      const totalCount = await Course.getCount(filters);
       
       res.json({
         courses,
@@ -73,10 +92,19 @@ class CourseController {
   static async getById(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       const course = await Course.getWithTopics(id);
       
       if (!course) {
         return res.status(404).json({ error: 'Course not found' });
+      }
+
+      // college_admin can only view courses from their institution
+      if (currentUser.role === 'college_admin') {
+        const creatorCollege = await CourseController.getCourseCreatorCollege(id);
+        if (creatorCollege !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You can only view courses from your institution' });
+        }
       }
 
       res.json(course);
@@ -89,6 +117,7 @@ class CourseController {
   static async update(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       const { 
         name, 
         category, 
@@ -103,6 +132,14 @@ class CourseController {
       const course = await Course.findById(id);
       if (!course) {
         return res.status(404).json({ error: 'Course not found' });
+      }
+
+      // college_admin can only update courses from their institution
+      if (currentUser.role === 'college_admin') {
+        const creatorCollege = await CourseController.getCourseCreatorCollege(id);
+        if (creatorCollege !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You can only update courses from your institution' });
+        }
       }
 
       await Course.update(id, { 
@@ -127,10 +164,19 @@ class CourseController {
   static async delete(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       
       const course = await Course.findById(id);
       if (!course) {
         return res.status(404).json({ error: 'Course not found' });
+      }
+
+      // college_admin can only delete courses from their institution
+      if (currentUser.role === 'college_admin') {
+        const creatorCollege = await CourseController.getCourseCreatorCollege(id);
+        if (creatorCollege !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You can only delete courses from your institution' });
+        }
       }
 
       await Course.delete(id);

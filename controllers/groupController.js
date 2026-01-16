@@ -14,7 +14,15 @@ class GroupController {
   static async getGroups(req, res) {
     try {
       const { college, name } = req.query;
-      const groups = await Group.getAll(college || null, null, null);
+      const currentUser = req.user;
+      
+      // college_admin can only see groups from their institution
+      let collegeFilter = college || null;
+      if (currentUser.role === 'college_admin') {
+        collegeFilter = currentUser.college_name;
+      }
+      
+      const groups = await Group.getAll(collegeFilter, null, null);
       
       // Filter by name if provided
       let filteredGroups = groups;
@@ -35,10 +43,16 @@ class GroupController {
   static async getGroup(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       const group = await Group.findById(id);
       
       if (!group) {
         return res.status(404).json({ error: 'Group not found' });
+      }
+
+      // college_admin can only view groups from their institution
+      if (currentUser.role === 'college_admin' && group.college_name !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only view groups from your institution' });
       }
 
       const members = await Group.getMembers(id);
@@ -52,15 +66,22 @@ class GroupController {
   static async createGroup(req, res) {
     try {
       const { name, college_name, degree, department, passout_year } = req.body;
-      const created_by = req.user.id;
+      const currentUser = req.user;
+      const created_by = currentUser.id;
 
-      if (!name || !college_name) {
+      // college_admin can only create groups in their own institution
+      let finalCollegeName = college_name;
+      if (currentUser.role === 'college_admin') {
+        finalCollegeName = currentUser.college_name;
+      }
+
+      if (!name || !finalCollegeName) {
         return res.status(400).json({ error: 'Name and college name are required' });
       }
 
       const groupId = await Group.create({
         name,
-        college_name,
+        college_name: finalCollegeName,
         degree: degree || null,
         department: department || null,
         passout_year: passout_year || null,
@@ -82,8 +103,28 @@ class GroupController {
     try {
       const { id } = req.params;
       const { name, college_name, degree, department, passout_year } = req.body;
+      const currentUser = req.user;
 
-      await Group.update(id, { name, college_name, degree, department, passout_year });
+      // Get the group being updated
+      const existingGroup = await Group.findById(id);
+      if (!existingGroup) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+
+      // college_admin can only update groups from their institution
+      if (currentUser.role === 'college_admin') {
+        if (existingGroup.college_name !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You can only update groups from your institution' });
+        }
+        // Prevent changing college_name to another institution
+        if (college_name && college_name !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You cannot move groups to another institution' });
+        }
+      }
+
+      const finalCollegeName = currentUser.role === 'college_admin' ? currentUser.college_name : college_name;
+
+      await Group.update(id, { name, college_name: finalCollegeName, degree, department, passout_year });
       const group = await Group.findById(id);
 
       res.json({
@@ -99,6 +140,19 @@ class GroupController {
   static async deleteGroup(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
+
+      // Get the group being deleted
+      const group = await Group.findById(id);
+      if (!group) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+
+      // college_admin can only delete groups from their institution
+      if (currentUser.role === 'college_admin' && group.college_name !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only delete groups from your institution' });
+      }
+
       await Group.delete(id);
       res.json({ message: 'Group deleted successfully' });
     } catch (error) {
@@ -140,13 +194,29 @@ class GroupController {
   static async uploadStudents(req, res) {
     try {
       const { group_id, college_name, department, section } = req.body;
+      const currentUser = req.user;
       
       if (!req.file) {
         return res.status(400).json({ error: 'Excel file is required' });
       }
 
-      if (!group_id || !college_name || !department) {
+      // college_admin can only upload to their institution
+      let finalCollegeName = college_name;
+      if (currentUser.role === 'college_admin') {
+        finalCollegeName = currentUser.college_name;
+      }
+
+      if (!group_id || !finalCollegeName || !department) {
         return res.status(400).json({ error: 'Group ID, college name, and department are required' });
+      }
+
+      // Verify the group belongs to the user's institution
+      const group = await Group.findById(group_id);
+      if (!group) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+      if (currentUser.role === 'college_admin' && group.college_name !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only upload students to groups in your institution' });
       }
 
       // Parse Excel file
@@ -184,7 +254,7 @@ class GroupController {
               email,
               password: null,
               role: 'student',
-              college_name,
+              college_name: finalCollegeName,
               roll_number,
               department,
               section: section || '1',
@@ -268,10 +338,16 @@ class GroupController {
     try {
       const { id } = req.params;
       const { search } = req.query;
+      const currentUser = req.user;
 
       const group = await Group.findById(id);
       if (!group) {
         return res.status(404).json({ error: 'Group not found' });
+      }
+
+      // college_admin can only edit groups from their institution
+      if (currentUser.role === 'college_admin' && group.college_name !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only edit groups from your institution' });
       }
 
       const members = await Group.getMembers(id);
@@ -292,8 +368,18 @@ class GroupController {
     try {
       const { id } = req.params;
       const { addUserIds = [], removeUserIds = [] } = req.body;
+      const currentUser = req.user;
       const Enrollment = require('../models/Enrollment');
       const pool = require('../config/db');
+
+      // Verify the group belongs to the user's institution
+      const group = await Group.findById(id);
+      if (!group) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+      if (currentUser.role === 'college_admin' && group.college_name !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only modify groups from your institution' });
+      }
 
       // Add new members to group
       if (addUserIds.length > 0) {

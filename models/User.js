@@ -1,18 +1,47 @@
 const pool = require('../config/db');
 
 class User {
+  /**
+   * Get role_id from user_roles table by role name
+   * @param {string} roleName - Role name (e.g., 'student', 'college_admin', 'primary_admin')
+   * @returns {Promise<number|null>} - Role ID or null
+   */
+  static async getRoleIdByName(roleName) {
+    try {
+      const [rows] = await pool.execute(
+        'SELECT id FROM user_roles WHERE name = ?',
+        [roleName]
+      );
+      return rows[0] ? rows[0].id : null;
+    } catch (error) {
+      // If table doesn't exist, return null (backward compatibility)
+      if (error.code === 'ER_NO_SUCH_TABLE') {
+        console.warn('user_roles table not found. Please run migration.');
+        return null;
+      }
+      throw error;
+    }
+  }
+
   static async create(userData) {
-    const { name, email, password, role, college_name, roll_number, department, section, degree, otp, otp_expires_at } = userData;
+    const { name, email, password, role, role_id, college_name, roll_number, department, section, degree, otp, otp_expires_at } = userData;
     
     try {
-      // Try full insert with all columns
+      // Get role_id from role name if not provided
+      let finalRoleId = role_id;
+      if (!finalRoleId && role) {
+        finalRoleId = await this.getRoleIdByName(role);
+      }
+
+      // Try full insert with all columns including role_id
       const [result] = await pool.execute(
-        'INSERT INTO users (name, email, password, role, college_name, roll_number, department, section, degree, otp, otp_expires_at, password_set) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (name, email, password, role, role_id, college_name, roll_number, department, section, degree, otp, otp_expires_at, password_set) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           name, 
           email, 
           password || null, 
           role, 
+          finalRoleId || null,
           college_name || null, 
           roll_number || null, 
           department || null, 
@@ -25,7 +54,29 @@ class User {
       );
       return result.insertId;
     } catch (error) {
-      // If columns don't exist, use basic insert
+      // If role_id column doesn't exist, try without it
+      if (error.code === 'ER_BAD_FIELD_ERROR' && error.message.includes('role_id')) {
+        console.warn('role_id column missing, inserting without it. Please run migration.');
+        const [result] = await pool.execute(
+          'INSERT INTO users (name, email, password, role, college_name, roll_number, department, section, degree, otp, otp_expires_at, password_set) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            name, 
+            email, 
+            password || null, 
+            role, 
+            college_name || null, 
+            roll_number || null, 
+            department || null, 
+            section || '1',
+            degree || null,
+            otp || null,
+            otp_expires_at || null,
+            password ? true : false
+          ]
+        );
+        return result.insertId;
+      }
+      // If other columns don't exist, use basic insert
       if (error.code === 'ER_BAD_FIELD_ERROR') {
         console.warn('New columns missing, using basic insert. Please run migration.');
         const [result] = await pool.execute(
@@ -196,13 +247,27 @@ class User {
   }
 
   static async update(id, userData) {
-    const { name, email, role, college_name, roll_number, department, section, degree } = userData;
+    const { name, email, role, role_id, college_name, roll_number, department, section, degree } = userData;
     const updates = [];
     const values = [];
     
     if (name !== undefined) { updates.push('name = ?'); values.push(name); }
     if (email !== undefined) { updates.push('email = ?'); values.push(email); }
-    if (role !== undefined) { updates.push('role = ?'); values.push(role); }
+    if (role !== undefined) { 
+      updates.push('role = ?'); 
+      values.push(role);
+      // Also update role_id if role is being changed
+      try {
+        const newRoleId = await this.getRoleIdByName(role);
+        if (newRoleId) {
+          updates.push('role_id = ?');
+          values.push(newRoleId);
+        }
+      } catch (e) {
+        console.warn('Could not get role_id for role:', role);
+      }
+    }
+    if (role_id !== undefined) { updates.push('role_id = ?'); values.push(role_id); }
     if (college_name !== undefined) { updates.push('college_name = ?'); values.push(college_name); }
     if (roll_number !== undefined) { updates.push('roll_number = ?'); values.push(roll_number); }
     if (department !== undefined) { updates.push('department = ?'); values.push(department); }
@@ -211,10 +276,25 @@ class User {
     
     if (updates.length > 0) {
       values.push(id);
-      await pool.execute(
-        `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
-        values
-      );
+      try {
+        await pool.execute(
+          `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+          values
+        );
+      } catch (error) {
+        // If role_id column doesn't exist, retry without it
+        if (error.code === 'ER_BAD_FIELD_ERROR' && error.message.includes('role_id')) {
+          const filteredUpdates = updates.filter(u => u !== 'role_id = ?');
+          const filteredValues = values.filter((v, i) => updates[i] !== 'role_id = ?');
+          filteredValues.push(id);
+          await pool.execute(
+            `UPDATE users SET ${filteredUpdates.join(', ')} WHERE id = ?`,
+            filteredValues
+          );
+        } else {
+          throw error;
+        }
+      }
     }
   }
 

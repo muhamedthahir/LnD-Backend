@@ -5,6 +5,7 @@ const XLSX = require('xlsx');
 const multer = require('multer');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
+const { getInstitutionFilter, canAccessInstitution } = require('../middleware/auth');
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -20,13 +21,20 @@ class AdminController {
       const limitInt = Math.max(1, Math.min(1000, parseInt(limit, 10) || 10));
       const offsetInt = Math.max(0, parseInt(offset, 10) || 0);
       
+      // Apply institution filter for college_admin
+      let collegeFilter = college || null;
+      if (currentUser.role === 'college_admin') {
+        // Force filter to college_admin's institution only
+        collegeFilter = currentUser.college_name;
+      }
+      
       // Debug logging
-      console.log('GetUsers called with:', { search, college, limit: limitInt, offset: offsetInt });
+      console.log('GetUsers called with:', { search, college: collegeFilter, limit: limitInt, offset: offsetInt, userRole: currentUser.role });
       
       // Get total count and paginated users with filters applied at database level
       const result = await User.getAllPaginated({
         search: search || null,
-        college: college || null,
+        college: collegeFilter,
         limit: limitInt,
         offset: offsetInt,
         excludePrimaryAdmin: true,
@@ -60,6 +68,7 @@ class AdminController {
   static async createUser(req, res) {
     try {
       const { name, email, password, role, college_name, roll_number, department, section, degree } = req.body;
+      const currentUser = req.user;
 
       if (!name || !email) {
         return res.status(400).json({ error: 'Name and email are required' });
@@ -71,8 +80,19 @@ class AdminController {
         return res.status(400).json({ error: 'Invalid role' });
       }
 
+      // college_admin can only create users in their own institution
+      let finalCollegeName = college_name;
+      if (currentUser.role === 'college_admin') {
+        // Force college_name to the admin's institution
+        finalCollegeName = currentUser.college_name;
+        // college_admin cannot create other college_admins
+        if (role === 'college_admin') {
+          return res.status(403).json({ error: 'College admin cannot create other college admins' });
+        }
+      }
+
       // Validate college name (required for all users)
-      if (!college_name) {
+      if (!finalCollegeName) {
         return res.status(400).json({ error: 'College name is required' });
       }
 
@@ -99,7 +119,7 @@ class AdminController {
         email,
         password: null, // Password will be set after OTP verification
         role,
-        college_name: college_name || null,
+        college_name: finalCollegeName || null,
         roll_number: roll_number || null,
         department: department || null,
         section: section || '1',
@@ -155,6 +175,28 @@ class AdminController {
     try {
       const { id } = req.params;
       const updateData = req.body;
+      const currentUser = req.user;
+
+      // Get the user being updated
+      const targetUser = await User.findById(id);
+      if (!targetUser) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // college_admin can only update users in their own institution
+      if (currentUser.role === 'college_admin') {
+        if (targetUser.college_name !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You can only update users in your institution' });
+        }
+        // Prevent changing college_name to another institution
+        if (updateData.college_name && updateData.college_name !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You cannot move users to another institution' });
+        }
+        // Prevent promoting to college_admin
+        if (updateData.role === 'college_admin') {
+          return res.status(403).json({ error: 'You cannot promote users to college admin' });
+        }
+      }
 
       // Remove password from update if present (should be separate endpoint)
       delete updateData.password;
@@ -187,6 +229,17 @@ class AdminController {
       const userToDelete = await User.findById(userId);
       if (!userToDelete) {
         return res.status(404).json({ error: 'User not found' });
+      }
+
+      // college_admin can only delete users in their own institution
+      if (currentUser.role === 'college_admin') {
+        if (userToDelete.college_name !== currentUser.college_name) {
+          return res.status(403).json({ error: 'You can only delete users in your institution' });
+        }
+        // college_admin cannot delete other college_admins
+        if (userToDelete.role === 'college_admin') {
+          return res.status(403).json({ error: 'College admin cannot delete other college admins' });
+        }
       }
 
       // Prevent deleting primary_admin users
@@ -291,12 +344,19 @@ class AdminController {
   static async uploadBulkUsers(req, res) {
     try {
       const { college_name } = req.body;
+      const currentUser = req.user;
       
       if (!req.file) {
         return res.status(400).json({ error: 'Excel file is required' });
       }
 
-      if (!college_name) {
+      // college_admin can only upload users to their own institution
+      let finalCollegeName = college_name;
+      if (currentUser.role === 'college_admin') {
+        finalCollegeName = currentUser.college_name;
+      }
+
+      if (!finalCollegeName) {
         return res.status(400).json({ error: 'College name is required' });
       }
 
@@ -342,7 +402,7 @@ class AdminController {
             email,
             password: null,
             role: 'student',
-            college_name,
+            college_name: finalCollegeName,
             roll_number,
             department,
             section: section || '1',

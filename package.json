@@ -8,6 +8,7 @@
     "start": "node app.js",
     "dev": "nodemon app.js",
     "seed": "node scripts/seedUsers.js",
+    "seed-roles": "node scripts/seedUserRoles.js",
     "create-tables": "node scripts/createTables.js",
     "migrate": "node scripts/runMigration.js",
     "check-db": "node scripts/checkDatabase.js"
