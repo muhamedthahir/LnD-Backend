@@ -65,6 +65,37 @@ class AdminController {
     }
   }
 
+  static async getUser(req, res) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+      
+      const user = await User.findById(id);
+      
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // college_admin can only view users from their institution
+      if (currentUser.role === 'college_admin') {
+        if (user.college_name !== currentUser.college_name) {
+          return res.status(403).json({ error: 'Access denied. User is not from your institution.' });
+        }
+      }
+
+      // Don't expose password hash
+      delete user.password;
+      
+      // Add status based on password_set
+      user.status = user.password_set ? 'activated' : 'pending';
+      
+      res.json(user);
+    } catch (error) {
+      console.error('Get user error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
   static async createUser(req, res) {
     try {
       const { name, email, password, role, college_name, roll_number, department, section, degree } = req.body;
