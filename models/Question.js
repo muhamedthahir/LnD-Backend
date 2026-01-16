@@ -15,7 +15,7 @@ class Question {
     return `Q${num.toString().padStart(4, '0')}`;
   }
 
-  static async getAllPaginated({ search, limit = 10, offset = 0, questionBankId, questionTypeId, levelId, statusId, categoryId }) {
+  static async getAllPaginated({ search, limit = 10, offset = 0, questionBankId, questionTypeId, levelId, statusId, categoryId, institutionId }) {
     // Base WHERE conditions
     let whereClause = 'WHERE 1=1';
     const params = [];
@@ -48,6 +48,12 @@ class Question {
     if (categoryId) {
       whereClause += ' AND q.category_id = ?';
       params.push(categoryId);
+    }
+
+    // Filter by institution through question bank
+    if (institutionId) {
+      whereClause += ' AND qb.institution_id = ?';
+      params.push(institutionId);
     }
 
     // Get total count with a simpler query structure

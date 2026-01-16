@@ -28,7 +28,8 @@ class AdministrationController {
         individualUsers
       } = req.body;
 
-      const userId = req.user?.id;
+      const currentUser = req.user;
+      const userId = currentUser?.id;
 
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -41,7 +42,12 @@ class AdministrationController {
 
       // Handle enrollments (page 2 data)
       let invitesSent = false;
-      const collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+      let collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+      
+      // college_admin can only create administrations for their institution
+      if (currentUser.role === 'college_admin') {
+        collegeName = currentUser.college_name;
+      }
 
       // Create administration - will be published when invites are sent
       const adminId = await CourseAdministration.create({
@@ -151,8 +157,15 @@ class AdministrationController {
         status = 'all',
         college
       } = req.query;
+      const currentUser = req.user;
 
       const offset = (parseInt(page) - 1) * parseInt(limit);
+
+      // college_admin can only see administrations from their institution
+      let collegeFilter = college;
+      if (currentUser.role === 'college_admin') {
+        collegeFilter = currentUser.college_name;
+      }
 
       const result = await CourseAdministration.getAll({
         limit: parseInt(limit),
@@ -160,7 +173,7 @@ class AdministrationController {
         filters: {
           administrationName,
           status,
-          college
+          college: collegeFilter
         }
       });
 
@@ -182,10 +195,16 @@ class AdministrationController {
   static async getById(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       const administration = await CourseAdministration.findById(id);
 
       if (!administration) {
         return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only view administrations from their institution
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only view administrations from your institution' });
       }
 
       res.json({ administration });
@@ -201,6 +220,7 @@ class AdministrationController {
   static async update(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       const {
         administrationName,
         startTime,
@@ -220,6 +240,17 @@ class AdministrationController {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
+      // Check if administration exists and belongs to user's institution
+      const existingAdmin = await CourseAdministration.findById(id);
+      if (!existingAdmin) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only update administrations from their institution
+      if (currentUser.role === 'college_admin' && existingAdmin.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only update administrations from your institution' });
+      }
+
       const success = await CourseAdministration.update(id, {
         administrationName,
         startDate: new Date(startTime),
@@ -232,7 +263,12 @@ class AdministrationController {
 
       // Handle enrollments if provided (from page 2)
       let invitesSent = false;
-      const collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+      let collegeName = candidateType === 'group' ? groupCollege : individualCollege;
+      
+      // college_admin can only use their institution
+      if (currentUser.role === 'college_admin') {
+        collegeName = currentUser.college_name;
+      }
       
       // Update users' college_name to match the selected college when enrollments are created
       // This ensures the college name is correctly reflected in the administration table
@@ -322,6 +358,18 @@ class AdministrationController {
   static async delete(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
+
+      // Check if administration exists and belongs to user's institution
+      const existingAdmin = await CourseAdministration.findById(id);
+      if (!existingAdmin) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only delete administrations from their institution
+      if (currentUser.role === 'college_admin' && existingAdmin.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only delete administrations from your institution' });
+      }
 
       const success = await CourseAdministration.delete(id);
 
@@ -354,7 +402,8 @@ class AdministrationController {
         college
       } = req.body;
 
-      const userId = req.user?.id;
+      const currentUser = req.user;
+      const userId = currentUser?.id;
 
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -362,6 +411,12 @@ class AdministrationController {
 
       if (!administrationName || !category || !competencyLevel || !courseId || !startTime || !endTime) {
         return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // college_admin can only create administrations for their institution
+      let collegeName = college;
+      if (currentUser.role === 'college_admin') {
+        collegeName = currentUser.college_name;
       }
 
       const adminId = await CourseAdministration.create({
@@ -374,7 +429,7 @@ class AdministrationController {
         endDate: new Date(endTime),
         status: 'draft',
         createdBy: userId,
-        college: college || null
+        college: collegeName || null
       });
 
       const administration = await CourseAdministration.findById(adminId);

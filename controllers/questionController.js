@@ -5,8 +5,34 @@ const MCQMultiSelectQuestion = require('../models/MCQMultiSelectQuestion');
 const Status = require('../models/Status');
 const Option = require('../models/Option');
 const TestCase = require('../models/TestCase');
+const QuestionBank = require('../models/QuestionBank');
+const Institution = require('../models/Institution');
 
 class QuestionController {
+  // Helper to get institution ID for college_admin
+  static async getInstitutionIdForUser(user) {
+    if (user.role === 'college_admin' && user.college_name) {
+      const institution = await Institution.findByName(user.college_name);
+      return institution ? institution.id : null;
+    }
+    return null;
+  }
+
+  // Helper to check if question belongs to user's institution
+  static async canAccessQuestion(user, questionId) {
+    if (user.role === 'primary_admin') return true;
+    if (user.role !== 'college_admin') return true; // Students can access based on enrollment
+    
+    const question = await Question.findById(questionId);
+    if (!question || !question.question_bank_id) return false;
+    
+    const questionBank = await QuestionBank.findById(question.question_bank_id);
+    if (!questionBank) return false;
+    
+    const userInstitutionId = await QuestionController.getInstitutionIdForUser(user);
+    return questionBank.institution_id === userInstitutionId;
+  }
+
   // Get all questions with pagination
   static async getQuestions(req, res) {
     try {
@@ -14,16 +40,35 @@ class QuestionController {
         search, limit = 10, offset = 0, 
         question_bank_id, question_type_id, level_id, status_id, category_id 
       } = req.query;
+      const currentUser = req.user;
+      
+      // For college_admin, filter questions by their institution's question banks
+      let questionBankFilter = question_bank_id || null;
+      let institutionFilter = null;
+      
+      if (currentUser.role === 'college_admin') {
+        institutionFilter = await QuestionController.getInstitutionIdForUser(currentUser);
+        if (!institutionFilter) {
+          // If no institution found, return empty result
+          return res.json({
+            questions: [],
+            total: 0,
+            limit: parseInt(limit),
+            offset: parseInt(offset)
+          });
+        }
+      }
       
       const result = await Question.getAllPaginated({
         search: search || null,
         limit: parseInt(limit),
         offset: parseInt(offset),
-        questionBankId: question_bank_id || null,
+        questionBankId: questionBankFilter,
         questionTypeId: question_type_id || null,
         levelId: level_id || null,
         statusId: status_id || null,
-        categoryId: category_id || null
+        categoryId: category_id || null,
+        institutionId: institutionFilter
       });
 
       res.json({
@@ -42,10 +87,19 @@ class QuestionController {
   static async getQuestion(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
       const question = await Question.findById(id);
       
       if (!question) {
         return res.status(404).json({ error: 'Question not found' });
+      }
+
+      // college_admin can only view questions from their institution's question banks
+      if (currentUser.role === 'college_admin') {
+        const canAccess = await QuestionController.canAccessQuestion(currentUser, id);
+        if (!canAccess) {
+          return res.status(403).json({ error: 'You can only view questions from your institution' });
+        }
       }
 
       const questionType = await QuestionType.findById(question.question_type_id);
@@ -116,7 +170,8 @@ class QuestionController {
         // MCQ/Multi Select options
         options
       } = req.body;
-      const userId = req.user?.id;
+      const currentUser = req.user;
+      const userId = currentUser?.id;
 
       if (!name) {
         return res.status(400).json({ error: 'Question name is required' });
@@ -124,6 +179,17 @@ class QuestionController {
 
       if (!question_type_id) {
         return res.status(400).json({ error: 'Question type is required' });
+      }
+
+      // college_admin can only create questions in their institution's question banks
+      if (currentUser.role === 'college_admin' && question_bank_id) {
+        const questionBank = await QuestionBank.findById(question_bank_id);
+        if (questionBank) {
+          const userInstitutionId = await QuestionController.getInstitutionIdForUser(currentUser);
+          if (questionBank.institution_id !== userInstitutionId) {
+            return res.status(403).json({ error: 'You can only create questions in your institution\'s question banks' });
+          }
+        }
       }
 
       // Get default status if not provided
@@ -225,11 +291,31 @@ class QuestionController {
         mcq_details,
         options
       } = req.body;
-      const userId = req.user?.id;
+      const currentUser = req.user;
+      const userId = currentUser?.id;
 
       const existing = await Question.findById(id);
       if (!existing) {
         return res.status(404).json({ error: 'Question not found' });
+      }
+
+      // college_admin can only update questions from their institution's question banks
+      if (currentUser.role === 'college_admin') {
+        const canAccess = await QuestionController.canAccessQuestion(currentUser, id);
+        if (!canAccess) {
+          return res.status(403).json({ error: 'You can only update questions from your institution' });
+        }
+        
+        // If changing question bank, verify new question bank belongs to same institution
+        if (question_bank_id && question_bank_id !== existing.question_bank_id) {
+          const newQuestionBank = await QuestionBank.findById(question_bank_id);
+          if (newQuestionBank) {
+            const userInstitutionId = await QuestionController.getInstitutionIdForUser(currentUser);
+            if (newQuestionBank.institution_id !== userInstitutionId) {
+              return res.status(403).json({ error: 'You can only move questions to your institution\'s question banks' });
+            }
+          }
+        }
       }
 
       await Question.update(id, {
@@ -304,10 +390,19 @@ class QuestionController {
   static async deleteQuestion(req, res) {
     try {
       const { id } = req.params;
+      const currentUser = req.user;
 
       const existing = await Question.findById(id);
       if (!existing) {
         return res.status(404).json({ error: 'Question not found' });
+      }
+
+      // college_admin can only delete questions from their institution's question banks
+      if (currentUser.role === 'college_admin') {
+        const canAccess = await QuestionController.canAccessQuestion(currentUser, id);
+        if (!canAccess) {
+          return res.status(403).json({ error: 'You can only delete questions from your institution' });
+        }
       }
 
       await Question.delete(id);
