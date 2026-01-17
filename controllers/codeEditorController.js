@@ -152,42 +152,42 @@ function detectJavaMainClass(code) {
     .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
     .replace(/\/\/.*$/gm, '');         // Remove single-line comments
 
-  // Find all class declarations
-  const classPattern = /\b(public\s+)?class\s+(\w+)/g;
-  const classes = [];
-  let match;
+  // Find the position of the main method
+  // Matches: public static void main(String[] args) / (String args[]) / (String... args)
+  const mainMethodMatch = codeWithoutComments.match(/public\s+static\s+void\s+main\s*\(\s*String/);
   
-  while ((match = classPattern.exec(codeWithoutComments)) !== null) {
-    classes.push({
-      name: match[2],
-      isPublic: !!match[1],
-      startIndex: match.index
-    });
-  }
-
-  if (classes.length === 0) {
-    return 'Main'; // Default fallback
-  }
-
-  // Find which class contains the main method
-  // Pattern matches: public static void main(String[] args) or (String args[]) or (String... args)
-  const mainMethodPattern = /public\s+static\s+void\s+main\s*\(\s*String\s*(\[\s*\]|\.\.\.)?\s*\w*\s*(\[\s*\])?\s*\)/;
-
-  for (let i = 0; i < classes.length; i++) {
-    const currentClass = classes[i];
-    const nextClassStart = classes[i + 1]?.startIndex || codeWithoutComments.length;
+  if (mainMethodMatch) {
+    // Get everything before the main method
+    const beforeMain = codeWithoutComments.substring(0, mainMethodMatch.index);
     
-    // Get the code block for this class
-    const classCode = codeWithoutComments.substring(currentClass.startIndex, nextClassStart);
+    // Find all class declarations before the main method
+    // The last one will be the class containing the main method
+    const classMatches = [...beforeMain.matchAll(/(?:public\s+)?class\s+(\w+)/g)];
     
-    if (mainMethodPattern.test(classCode)) {
-      return currentClass.name;
+    if (classMatches.length > 0) {
+      // Return the last class declared before main (the class containing main)
+      const mainClassName = classMatches[classMatches.length - 1][1];
+      console.log(`Detected Java main class: ${mainClassName}`);
+      return mainClassName;
     }
   }
 
-  // If no main method found, return the public class or first class
-  const publicClass = classes.find(c => c.isPublic);
-  return publicClass ? publicClass.name : classes[0].name;
+  // Fallback: find any public class
+  const publicClassMatch = codeWithoutComments.match(/public\s+class\s+(\w+)/);
+  if (publicClassMatch) {
+    console.log(`No main method found, using public class: ${publicClassMatch[1]}`);
+    return publicClassMatch[1];
+  }
+
+  // Fallback: find any class
+  const anyClassMatch = codeWithoutComments.match(/class\s+(\w+)/);
+  if (anyClassMatch) {
+    console.log(`No main method found, using first class: ${anyClassMatch[1]}`);
+    return anyClassMatch[1];
+  }
+
+  console.log('No class found, using default: Main');
+  return 'Main';
 }
 
 /**
