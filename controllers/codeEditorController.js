@@ -49,7 +49,7 @@ const executeCode = async (req, res) => {
       version: languageVersions[pistonLanguage] || languageVersions[language.toLowerCase()] || version || '*',
       files: [
         {
-          name: getFileName(language),
+          name: getFileName(language, code),
           content: code
         }
       ],
@@ -143,13 +143,68 @@ const getRuntimes = async (req, res) => {
 };
 
 /**
+ * Helper function to detect the main class in Java code
+ * Finds the class that contains "public static void main(String" method
+ */
+function detectJavaMainClass(code) {
+  // Remove comments to avoid false matches
+  const codeWithoutComments = code
+    .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
+    .replace(/\/\/.*$/gm, '');         // Remove single-line comments
+
+  // Find all class declarations
+  const classPattern = /\b(public\s+)?class\s+(\w+)/g;
+  const classes = [];
+  let match;
+  
+  while ((match = classPattern.exec(codeWithoutComments)) !== null) {
+    classes.push({
+      name: match[2],
+      isPublic: !!match[1],
+      startIndex: match.index
+    });
+  }
+
+  if (classes.length === 0) {
+    return 'Main'; // Default fallback
+  }
+
+  // Find which class contains the main method
+  // Pattern matches: public static void main(String[] args) or (String args[]) or (String... args)
+  const mainMethodPattern = /public\s+static\s+void\s+main\s*\(\s*String\s*(\[\s*\]|\.\.\.)?\s*\w*\s*(\[\s*\])?\s*\)/;
+
+  for (let i = 0; i < classes.length; i++) {
+    const currentClass = classes[i];
+    const nextClassStart = classes[i + 1]?.startIndex || codeWithoutComments.length;
+    
+    // Get the code block for this class
+    const classCode = codeWithoutComments.substring(currentClass.startIndex, nextClassStart);
+    
+    if (mainMethodPattern.test(classCode)) {
+      return currentClass.name;
+    }
+  }
+
+  // If no main method found, return the public class or first class
+  const publicClass = classes.find(c => c.isPublic);
+  return publicClass ? publicClass.name : classes[0].name;
+}
+
+/**
  * Helper function to get appropriate file name based on language
  */
-function getFileName(language) {
+function getFileName(language, code = '') {
+  const lang = language.toLowerCase();
+  
+  // For Java, detect the main class dynamically
+  if (lang === 'java') {
+    const mainClassName = detectJavaMainClass(code);
+    return `${mainClassName}.java`;
+  }
+
   const fileExtensions = {
     'javascript': 'solution.js',
     'python': 'solution.py',
-    'java': 'Solution.java',
     'c': 'solution.c',
     'cpp': 'solution.cpp',
     'c++': 'solution.cpp',
@@ -163,7 +218,7 @@ function getFileName(language) {
     'kotlin': 'Solution.kt'
   };
 
-  return fileExtensions[language.toLowerCase()] || 'solution.txt';
+  return fileExtensions[lang] || 'solution.txt';
 }
 
 module.exports = {
