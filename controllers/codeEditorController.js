@@ -44,15 +44,13 @@ const executeCode = async (req, res) => {
     };
 
     // Prepare the request payload for Piston API
+    // For Java, this will split multiple classes into separate files
+    const files = getFilesForPiston(language, code);
+    
     const pistonPayload = {
       language: pistonLanguage,
       version: languageVersions[pistonLanguage] || languageVersions[language.toLowerCase()] || version || '*',
-      files: [
-        {
-          name: getFileName(language, code),
-          content: code
-        }
-      ],
+      files: files,
       stdin: stdin,
       args: [],
       compile_timeout: 10000,
@@ -143,68 +141,110 @@ const getRuntimes = async (req, res) => {
 };
 
 /**
- * Helper function to detect the main class in Java code
- * Finds the class that contains "public static void main(String" method
+ * Helper function to split Java code into multiple files (one class per file)
+ * Returns array of {name, content} objects for Piston API
  */
-function detectJavaMainClass(code) {
-  // Remove comments to avoid false matches
-  const codeWithoutComments = code
-    .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
-    .replace(/\/\/.*$/gm, '');         // Remove single-line comments
+function splitJavaIntoFiles(code) {
+  // Get imports and package statements (to include in all files)
+  const importPattern = /^(import\s+[\w.*]+\s*;|package\s+[\w.]+\s*;)/gm;
+  const imports = [];
+  let match;
+  while ((match = importPattern.exec(code)) !== null) {
+    imports.push(match[1]);
+  }
+  const importsBlock = imports.length > 0 ? imports.join('\n') + '\n\n' : '';
 
-  // Find the position of the main method
-  // Matches: public static void main(String[] args) / (String args[]) / (String... args)
-  const mainMethodMatch = codeWithoutComments.match(/public\s+static\s+void\s+main\s*\(\s*String/);
+  // Find all class declarations with their full content
+  // This regex captures: optional "public", "class", class name, and everything until the matching closing brace
+  const classPattern = /((?:public\s+)?class\s+(\w+)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w,\s]+\s*)?\{)/g;
+  const classes = [];
   
-  if (mainMethodMatch) {
-    // Get everything before the main method
-    const beforeMain = codeWithoutComments.substring(0, mainMethodMatch.index);
+  let lastIndex = 0;
+  const codeWithoutImports = code.replace(/^(import\s+[\w.*]+\s*;|package\s+[\w.]+\s*;)\s*/gm, '');
+  
+  // Find all class start positions
+  const classStarts = [];
+  while ((match = classPattern.exec(codeWithoutImports)) !== null) {
+    classStarts.push({
+      fullMatch: match[1],
+      className: match[2],
+      startIndex: match.index
+    });
+  }
+
+  // Extract each class with its content
+  for (let i = 0; i < classStarts.length; i++) {
+    const current = classStarts[i];
+    const startIdx = current.startIndex;
     
-    // Find all class declarations before the main method
-    // The last one will be the class containing the main method
-    const classMatches = [...beforeMain.matchAll(/(?:public\s+)?class\s+(\w+)/g)];
+    // Find the matching closing brace for this class
+    let braceCount = 0;
+    let endIdx = startIdx;
+    let foundStart = false;
     
-    if (classMatches.length > 0) {
-      // Return the last class declared before main (the class containing main)
-      const mainClassName = classMatches[classMatches.length - 1][1];
-      console.log(`Detected Java main class: ${mainClassName}`);
-      return mainClassName;
+    for (let j = startIdx; j < codeWithoutImports.length; j++) {
+      if (codeWithoutImports[j] === '{') {
+        braceCount++;
+        foundStart = true;
+      } else if (codeWithoutImports[j] === '}') {
+        braceCount--;
+        if (foundStart && braceCount === 0) {
+          endIdx = j + 1;
+          break;
+        }
+      }
+    }
+    
+    const classContent = codeWithoutImports.substring(startIdx, endIdx).trim();
+    classes.push({
+      name: current.className,
+      content: importsBlock + classContent
+    });
+  }
+
+  // If no classes found, return original code as Main.java
+  if (classes.length === 0) {
+    return [{ name: 'Main.java', content: code }];
+  }
+
+  // Detect which class has the main method
+  let mainClassName = null;
+  const mainMethodPattern = /public\s+static\s+void\s+main\s*\(\s*String/;
+  
+  for (const cls of classes) {
+    if (mainMethodPattern.test(cls.content)) {
+      mainClassName = cls.name;
+      break;
     }
   }
 
-  // Fallback: find any public class
-  const publicClassMatch = codeWithoutComments.match(/public\s+class\s+(\w+)/);
-  if (publicClassMatch) {
-    console.log(`No main method found, using public class: ${publicClassMatch[1]}`);
-    return publicClassMatch[1];
+  // Convert to file format
+  const files = classes.map(cls => ({
+    name: `${cls.name}.java`,
+    content: cls.content
+  }));
+
+  // Move main class file to first position (Piston runs the first file)
+  if (mainClassName) {
+    const mainIndex = files.findIndex(f => f.name === `${mainClassName}.java`);
+    if (mainIndex > 0) {
+      const mainFile = files.splice(mainIndex, 1)[0];
+      files.unshift(mainFile);
+    }
+    console.log(`Java main class detected: ${mainClassName}, split into ${files.length} files`);
   }
 
-  // Fallback: find any class
-  const anyClassMatch = codeWithoutComments.match(/class\s+(\w+)/);
-  if (anyClassMatch) {
-    console.log(`No main method found, using first class: ${anyClassMatch[1]}`);
-    return anyClassMatch[1];
-  }
-
-  console.log('No class found, using default: Main');
-  return 'Main';
+  return files;
 }
 
 /**
  * Helper function to get appropriate file name based on language
  */
-function getFileName(language, code = '') {
-  const lang = language.toLowerCase();
-  
-  // For Java, detect the main class dynamically
-  if (lang === 'java') {
-    const mainClassName = detectJavaMainClass(code);
-    return `${mainClassName}.java`;
-  }
-
+function getFileName(language) {
   const fileExtensions = {
     'javascript': 'solution.js',
     'python': 'solution.py',
+    'java': 'Solution.java',
     'c': 'solution.c',
     'cpp': 'solution.cpp',
     'c++': 'solution.cpp',
@@ -218,7 +258,26 @@ function getFileName(language, code = '') {
     'kotlin': 'Solution.kt'
   };
 
-  return fileExtensions[lang] || 'solution.txt';
+  return fileExtensions[language.toLowerCase()] || 'solution.txt';
+}
+
+/**
+ * Helper function to get files array for Piston API
+ * For Java, splits multiple classes into separate files
+ */
+function getFilesForPiston(language, code) {
+  const lang = language.toLowerCase();
+  
+  // For Java, split classes into separate files
+  if (lang === 'java') {
+    return splitJavaIntoFiles(code);
+  }
+
+  // For other languages, return single file
+  return [{
+    name: getFileName(language),
+    content: code
+  }];
 }
 
 module.exports = {
