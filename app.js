@@ -113,6 +113,9 @@ app.use('/api/mailer-templates', require('./routes/mailerTemplateRoutes'));
 // User Details routes
 app.use('/api/user-details', require('./routes/userDetailsRoutes'));
 
+// Assessment routes
+app.use('/api/assessment', require('./routes/assessmentRoutes'));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
