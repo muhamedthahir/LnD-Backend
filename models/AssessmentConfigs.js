@@ -355,12 +355,15 @@ class SegmentProgrammingQuestion {
       'SELECT COALESCE(MAX(sequence_order), 0) + 1 as next_order FROM segment_programming_questions WHERE assessment_segment_id = ?',
       [data.assessment_segment_id]
     );
-
+    const [ programming_question_id ] = await pool.execute(
+      `SELECT id from programming_questions where question_id = ${data.question_id}`
+    )
+    console.log( programming_question_id, data);
     const [result] = await pool.execute(
       `INSERT INTO segment_programming_questions 
        (assessment_segment_id, programming_question_id, sequence_order, weightage_override, is_mandatory)
        VALUES (?, ?, ?, ?, ?)`,
-      [data.assessment_segment_id, data.programming_question_id, 
+      [data.assessment_segment_id, programming_question_id[0].id, 
        data.sequence_order || maxOrder[0].next_order, data.weightage_override, data.is_mandatory ?? true]
     );
 
@@ -434,12 +437,15 @@ class SegmentMCQQuestion {
       'SELECT COALESCE(MAX(sequence_order), 0) + 1 as next_order FROM segment_mcq_questions WHERE assessment_segment_id = ?',
       [data.assessment_segment_id]
     );
-
+    const [ mcq_question_id ] = await pool.execute(
+      `SELECT id from mcq_multiselect_questions where question_id = ${data.question_id}`
+    )
+    console.log( mcq_question_id, data);
     const [result] = await pool.execute(
       `INSERT INTO segment_mcq_questions 
        (assessment_segment_id, mcq_question_id, sequence_order, weightage_override, is_mandatory)
        VALUES (?, ?, ?, ?, ?)`,
-      [data.assessment_segment_id, data.mcq_question_id, 
+      [data.assessment_segment_id, mcq_question_id[0].id, 
        data.sequence_order || maxOrder[0].next_order, data.weightage_override, data.is_mandatory ?? true]
     );
 

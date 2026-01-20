@@ -264,9 +264,10 @@ class AssessmentSegment {
 
     // Get programming questions
     const [programmingQuestions] = await pool.execute(
-      `SELECT spq.*, pq.title, pq.description, pq.difficulty, pq.weightage as default_weightage
+      `SELECT spq.*, q.name, q.description, q.level_id
        FROM segment_programming_questions spq
        JOIN programming_questions pq ON spq.programming_question_id = pq.id
+       JOIN questions q on pq.question_id = q.id
        WHERE spq.assessment_segment_id = ?
        ORDER BY spq.sequence_order ASC`,
       [id]
@@ -274,9 +275,10 @@ class AssessmentSegment {
 
     // Get MCQ questions
     const [mcqQuestions] = await pool.execute(
-      `SELECT smq.*, mq.question_text, mq.difficulty, mq.weightage as default_weightage
+      `SELECT smq.*, q.name, q.description, q.level_id  as default_weightage
        FROM segment_mcq_questions smq
        JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
+       JOIN questions q ON mq.question_id = q.id
        WHERE smq.assessment_segment_id = ?
        ORDER BY smq.sequence_order ASC`,
       [id]
@@ -295,12 +297,12 @@ class AssessmentSegment {
     await pool.execute(
       `UPDATE assessment_segments 
        SET total_marks = (
-         SELECT COALESCE(SUM(COALESCE(spq.weightage_override, pq.weightage)), 0)
+         SELECT COALESCE(SUM(COALESCE(spq.weightage_override)), 0)
          FROM segment_programming_questions spq
          JOIN programming_questions pq ON spq.programming_question_id = pq.id
          WHERE spq.assessment_segment_id = ?
        ) + (
-         SELECT COALESCE(SUM(COALESCE(smq.weightage_override, mq.weightage)), 0)
+         SELECT COALESCE(SUM(COALESCE(smq.weightage_override)), 0)
          FROM segment_mcq_questions smq
          JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
          WHERE smq.assessment_segment_id = ?
