@@ -35,10 +35,31 @@ class QuestionBank {
       params.push(statusId);
     }
 
-    // Get total count
-    const countQuery = query.replace(/SELECT qb\.\*.*FROM/, 'SELECT COUNT(*) as total FROM');
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
+    // Get total count - build count query from WHERE clause only
+    let countQuery = `
+      SELECT COUNT(*) as total
+      FROM question_banks qb
+      WHERE 1=1
+    `;
+    const countParams = [];
+    
+    if (search) {
+      countQuery += ' AND (qb.name LIKE ? OR qb.description LIKE ?)';
+      countParams.push(`%${search}%`, `%${search}%`);
+    }
+    
+    if (institutionId) {
+      countQuery += ' AND qb.institution_id = ?';
+      countParams.push(institutionId);
+    }
+    
+    if (statusId) {
+      countQuery += ' AND qb.status_id = ?';
+      countParams.push(statusId);
+    }
+    
+    const [countRows] = await pool.execute(countQuery, countParams);
+    const total = countRows && countRows[0] ? countRows[0].total : 0;
 
     // Get paginated results
     query += ' ORDER BY qb.created_at DESC';
