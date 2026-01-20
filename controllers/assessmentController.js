@@ -321,11 +321,11 @@ const reorderSegment = async (req, res) => {
  */
 const addProgrammingQuestion = async (req, res) => {
   try {
-    const { segment_id, programming_question_id, weightage_override, is_mandatory } = req.body;
+    const { segment_id, question_id, weightage_override = null, is_mandatory } = req.body;
 
     const id = await SegmentProgrammingQuestion.add({
       assessment_segment_id: segment_id,
-      programming_question_id,
+      question_id,
       weightage_override,
       is_mandatory
     });
@@ -362,11 +362,11 @@ const removeProgrammingQuestion = async (req, res) => {
  */
 const addMCQQuestion = async (req, res) => {
   try {
-    const { segment_id, mcq_question_id, weightage_override, is_mandatory } = req.body;
+    const { segment_id, question_id, weightage_override = null, is_mandatory } = req.body;
 
     const id = await SegmentMCQQuestion.add({
       assessment_segment_id: segment_id,
-      mcq_question_id,
+      question_id,
       weightage_override,
       is_mandatory
     });
