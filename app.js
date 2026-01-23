@@ -187,6 +187,15 @@ app.use((err, req, res, next) => {
   console.error('Error code:', err.code);
   console.error('Error stack:', err.stack);
   
+  // Ensure CORS headers are set on error responses
+  const origin = req.headers.origin;
+  if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  }
+  
   // Handle Multer errors specifically
   if (err.name === 'MulterError') {
     console.error('Multer error detected:', err.message, err.code);
@@ -205,6 +214,14 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use((req, res) => {
+  // Ensure CORS headers are set on 404 responses
+  const origin = req.headers.origin;
+  if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  }
   res.status(404).json({ error: 'Route not found' });
 });
 
