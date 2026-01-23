@@ -87,6 +87,9 @@ class AdministrationController {
       }
       
       if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
+        // Save selected groups for this administration
+        await CourseAdministration.saveSelectedGroups(adminId, selectedGroups);
+        
         // Get all users from selected groups
         for (const groupId of selectedGroups) {
           const members = await Group.getMembers(groupId);
@@ -208,7 +211,13 @@ class AdministrationController {
         return res.status(403).json({ error: 'You can only view administrations from your institution' });
       }
 
-      res.json({ administration });
+      // Get selected groups for this administration
+      const selectedGroups = await CourseAdministration.getSelectedGroups(id);
+
+      res.json({ 
+        administration,
+        selectedGroups
+      });
     } catch (error) {
       console.error('Get administration error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -294,6 +303,9 @@ class AdministrationController {
       }
       
       if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
+        // Save selected groups for this administration
+        await CourseAdministration.saveSelectedGroups(id, selectedGroups);
+        
         // Get all users from selected groups
         for (const groupId of selectedGroups) {
           const members = await Group.getMembers(groupId);
@@ -342,10 +354,12 @@ class AdministrationController {
       }
 
       const administration = await CourseAdministration.findById(id);
+      const savedGroups = await CourseAdministration.getSelectedGroups(id);
 
       res.json({
         message: 'Administration updated successfully',
-        administration
+        administration,
+        selectedGroups: savedGroups
       });
     } catch (error) {
       console.error('Update administration error:', error);
@@ -371,6 +385,16 @@ class AdministrationController {
       if (currentUser.role === 'college_admin' && existingAdmin.college !== currentUser.college_name) {
         return res.status(403).json({ error: 'You can only delete administrations from your institution' });
       }
+
+      // Check if administration has any enrollments/invites
+      if (existingAdmin.total_invites && existingAdmin.total_invites > 0) {
+        return res.status(400).json({ 
+          error: 'Cannot delete administration with enrolled users. Remove all enrollments first or archive the administration.' 
+        });
+      }
+
+      // Also delete any associated groups from administration_groups table
+      await pool.execute('DELETE FROM administration_groups WHERE administration_id = ?', [id]);
 
       const success = await CourseAdministration.delete(id);
 
@@ -456,20 +480,33 @@ class AdministrationController {
       });
 
       // Get all segments for all topics
-      const [segments] = await pool.execute(
-        `SELECT s.*, 'lesson' as segment_type 
+      // First get lesson segments
+      const [lessonSegments] = await pool.execute(
+        `SELECT s.id, s.topic_id, s.name as title, s.description, s.order_index, 
+                s.segment_type, s.created_at, s.updated_at, 'lesson' as type_category
          FROM segments s 
          JOIN topics t ON s.topic_id = t.id 
          WHERE t.course_id = ?
-         UNION ALL
-         SELECT ps.id, ps.topic_id, ps.title, ps.description, ps.position, ps.created_at, ps.updated_at, 
-                ps.segment_type as segment_type
+         ORDER BY s.topic_id, s.order_index`,
+        [administration.course_id]
+      );
+
+      // Then get practice segments
+      const [practiceSegments] = await pool.execute(
+        `SELECT ps.id, ps.topic_id, ps.name as title, ps.description, 0 as order_index,
+                'practice' as segment_type, ps.created_at, ps.updated_at, 'practice' as type_category
          FROM practice_segments ps 
          JOIN topics t ON ps.topic_id = t.id 
          WHERE t.course_id = ?
-         ORDER BY topic_id, position`,
-        [administration.course_id, administration.course_id]
+         ORDER BY ps.topic_id, ps.id`,
+        [administration.course_id]
       );
+
+      // Combine and sort segments
+      const segments = [...lessonSegments, ...practiceSegments].sort((a, b) => {
+        if (a.topic_id !== b.topic_id) return a.topic_id - b.topic_id;
+        return a.order_index - b.order_index;
+      });
 
       // Get segment progress for this user
       const [segmentProgress] = await pool.execute(
@@ -489,9 +526,10 @@ class AdministrationController {
 
       // Get MCQ submissions for practice segments
       const [mcqSubmissions] = await pool.execute(
-        `SELECT ms.*, q.question_text, q.question_type, ps.topic_id
+        `SELECT ms.*, q.name as question_text, qt.name as question_type, ps.topic_id
          FROM mcq_submissions ms
          JOIN questions q ON ms.mcq_question_id = q.id
+         JOIN question_types qt ON q.question_type_id = qt.id
          JOIN practice_segments ps ON ms.practice_segment_id = ps.id
          JOIN topics t ON ps.topic_id = t.id
          WHERE ms.user_id = ? AND t.course_id = ?`,
@@ -500,12 +538,12 @@ class AdministrationController {
 
       // Get programming submissions
       const [programmingSubmissions] = await pool.execute(
-        `SELECT s.*, q.question_text, q.title as question_title, ps.topic_id, ps.id as practice_segment_id
-         FROM submissions s
-         JOIN questions q ON s.question_id = q.id
-         JOIN practice_segments ps ON s.practice_segment_id = ps.id
+        `SELECT ps_sub.*, q.name as question_text, q.name as question_title, ps.topic_id, ps.id as practice_segment_id
+         FROM programming_submissions ps_sub
+         JOIN questions q ON ps_sub.programming_question_id = q.id
+         JOIN practice_segments ps ON ps_sub.practice_segment_id = ps.id
          JOIN topics t ON ps.topic_id = t.id
-         WHERE s.user_id = ? AND t.course_id = ?`,
+         WHERE ps_sub.user_id = ? AND t.course_id = ?`,
         [userId, administration.course_id]
       );
 
@@ -524,7 +562,7 @@ class AdministrationController {
         const topicSegments = segments
           .filter(s => s.topic_id === topic.id)
           .map(segment => {
-            const isLesson = segment.segment_type === 'lesson';
+            const isLesson = segment.type_category === 'lesson';
             const key = isLesson ? `segment_${segment.id}` : `practice_${segment.id}`;
             const segProgress = segmentProgressMap[key] || {
               status: 'not_started',

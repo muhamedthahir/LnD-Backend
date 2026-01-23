@@ -272,6 +272,94 @@ class CourseAdministration {
   }
 
   /**
+   * Save selected groups for an administration
+   * @param {number} administrationId - Administration ID
+   * @param {Array<number>} groupIds - Array of group IDs
+   * @returns {Promise<boolean>} Success
+   */
+  static async saveSelectedGroups(administrationId, groupIds) {
+    try {
+      // First, delete existing group associations
+      await executeWithRetry(
+        'DELETE FROM administration_groups WHERE administration_id = ?',
+        [administrationId]
+      );
+
+      // Insert new group associations
+      if (groupIds && groupIds.length > 0) {
+        const values = groupIds.map(groupId => [administrationId, groupId]);
+        const placeholders = values.map(() => '(?, ?)').join(', ');
+        const flatValues = values.flat();
+        
+        await executeWithRetry(
+          `INSERT INTO administration_groups (administration_id, group_id) VALUES ${placeholders}`,
+          flatValues
+        );
+      }
+
+      return true;
+    } catch (error) {
+      // If table doesn't exist, create it and retry
+      if (error.code === 'ER_NO_SUCH_TABLE') {
+        await this.createAdministrationGroupsTable();
+        return this.saveSelectedGroups(administrationId, groupIds);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get selected groups for an administration
+   * @param {number} administrationId - Administration ID
+   * @returns {Promise<Array>} Array of group objects
+   */
+  static async getSelectedGroups(administrationId) {
+    try {
+      const [rows] = await executeWithRetry(
+        `SELECT g.*, COUNT(gm.user_id) as member_count
+         FROM administration_groups ag
+         JOIN \`groups\` g ON ag.group_id = g.id
+         LEFT JOIN group_members gm ON g.id = gm.group_id
+         WHERE ag.administration_id = ?
+         GROUP BY g.id
+         ORDER BY g.name`,
+        [administrationId]
+      );
+      return rows;
+    } catch (error) {
+      if (error.code === 'ER_NO_SUCH_TABLE') {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Create administration_groups table
+   */
+  static async createAdministrationGroupsTable() {
+    try {
+      await executeWithRetry(`
+        CREATE TABLE IF NOT EXISTS administration_groups (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          administration_id INT NOT NULL,
+          group_id INT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_admin_group (administration_id, group_id),
+          INDEX idx_administration_id (administration_id),
+          INDEX idx_group_id (group_id),
+          FOREIGN KEY (administration_id) REFERENCES course_administrations(id) ON DELETE CASCADE,
+          FOREIGN KEY (group_id) REFERENCES \`groups\`(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      console.log('Administration groups table created successfully');
+    } catch (error) {
+      console.error('Error creating administration_groups table:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Create the course_administrations table
    * @returns {Promise<void>}
    */
