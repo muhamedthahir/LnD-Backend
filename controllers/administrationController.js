@@ -2,7 +2,10 @@ const CourseAdministration = require('../models/CourseAdministration');
 const Enrollment = require('../models/Enrollment');
 const Group = require('../models/Group');
 const User = require('../models/User');
+const CourseProgressInvite = require('../models/CourseProgressInvite');
+const UserTopicProgress = require('../models/UserTopicProgress');
 const { generateTokens } = require('../utils/jwt');
+const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
 const pool = require('../config/db');
 
 class AdministrationController {
@@ -748,6 +751,172 @@ class AdministrationController {
       });
     } catch (error) {
       console.error('Save as draft error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Update course progress for all users in an administration
+   * Recalculates segment and topic progress, then updates course progress
+   * Creates a course_progress_invite record and sends email notification
+   */
+  static async updateAllUsersProgress(req, res) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      // Check if administration exists
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only update progress for their institution
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only update progress for your institution' });
+      }
+
+      const courseId = administration.course_id;
+
+      // Get all enrolled users for this administration
+      const enrolledUsers = await Enrollment.findByAdministrationId(id);
+
+      if (enrolledUsers.length === 0) {
+        return res.status(400).json({ error: 'No users enrolled in this administration' });
+      }
+
+      // Create a progress invite record
+      const progressInviteId = await CourseProgressInvite.create({
+        administration_id: id,
+        course_id: courseId,
+        triggered_by: currentUser.id,
+        total_users: enrolledUsers.length,
+        users_updated: 0,
+        status: 'in_progress',
+        message: 'Progress update started'
+      });
+
+      let usersUpdated = 0;
+      const errors = [];
+
+      // Update progress for each user
+      for (const user of enrolledUsers) {
+        try {
+          // Get all topics for this course
+          const [topics] = await pool.execute(
+            'SELECT id FROM topics WHERE course_id = ?',
+            [courseId]
+          );
+
+          // Recalculate progress for each topic
+          for (const topic of topics) {
+            await UserTopicProgress.recalculateFromSegments(user.user_id, topic.id, courseId);
+          }
+
+          // Update overall course progress
+          await UserTopicProgress.updateCourseProgress(user.user_id, courseId);
+
+          usersUpdated++;
+        } catch (userError) {
+          console.error(`Error updating progress for user ${user.user_id}:`, userError);
+          errors.push({ user_id: user.user_id, error: userError.message });
+        }
+      }
+
+      // Update progress invite record
+      const completedAt = new Date();
+      const status = errors.length === 0 ? 'completed' : (usersUpdated > 0 ? 'completed' : 'failed');
+      const message = errors.length > 0 
+        ? `Updated ${usersUpdated}/${enrolledUsers.length} users. ${errors.length} errors occurred.`
+        : `Successfully updated progress for ${usersUpdated} users`;
+
+      await CourseProgressInvite.update(progressInviteId, {
+        users_updated: usersUpdated,
+        status,
+        message,
+        completed_at: completedAt
+      });
+
+      // Send email notification to college admin and primary admin
+      try {
+        // Get admins to notify
+        const [adminsToNotify] = await pool.execute(
+          `SELECT DISTINCT u.id, u.name, u.email, u.role
+           FROM users u
+           WHERE (u.role = 'primary_admin')
+              OR (u.role = 'college_admin' AND u.college_name = ?)`,
+          [administration.college]
+        );
+
+        const progressInvite = await CourseProgressInvite.findById(progressInviteId);
+
+        for (const admin of adminsToNotify) {
+          try {
+            await sendOTPEmailWithTemplate({
+              to: admin.email,
+              templateName: 'course_progress_update',
+              variables: {
+                admin_name: admin.name,
+                administration_name: administration.administration_name,
+                course_name: progressInvite.course_name || 'Course',
+                total_users: enrolledUsers.length,
+                users_updated: usersUpdated,
+                triggered_by: currentUser.name,
+                update_date: completedAt.toLocaleString(),
+                institution: administration.college || 'N/A'
+              },
+              userId: currentUser.id
+            });
+          } catch (emailError) {
+            console.error(`Error sending email to ${admin.email}:`, emailError);
+          }
+        }
+
+        // Update email sent timestamp
+        await CourseProgressInvite.update(progressInviteId, {
+          email_sent_at: new Date()
+        });
+      } catch (emailError) {
+        console.error('Error sending notification emails:', emailError);
+      }
+
+      res.json({
+        message: message,
+        progress_invite_id: progressInviteId,
+        total_users: enrolledUsers.length,
+        users_updated: usersUpdated,
+        errors: errors.length > 0 ? errors : undefined
+      });
+    } catch (error) {
+      console.error('Update all users progress error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Get progress update history for an administration
+   */
+  static async getProgressUpdateHistory(req, res) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      // Check if administration exists
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only view their institution's data
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      const history = await CourseProgressInvite.findByAdministrationId(id);
+
+      res.json({ history });
+    } catch (error) {
+      console.error('Get progress update history error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   }

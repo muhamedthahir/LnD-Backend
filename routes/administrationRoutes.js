@@ -9,6 +9,8 @@ router.get('/', authenticate, authorize('college_admin', 'primary_admin'), Admin
 router.get('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getById);
 router.get('/:id/enrolled-users', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getEnrolledUsers);
 router.get('/:id/users/:userId/progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getUserProgressReport);
+router.post('/:id/update-progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.updateAllUsersProgress);
+router.get('/:id/progress-history', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getProgressUpdateHistory);
 router.put('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.update);
 router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.delete);
 router.post('/draft', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.saveAsDraft);
