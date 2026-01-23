@@ -10,7 +10,7 @@ const WebSocketServer = require('./services/WebSocketServer');
 const CourseAdministration = require('./models/CourseAdministration');
 CourseAdministration.createTable().catch(err => {
   console.error('Error creating course administrations table:', err);
-});
+}); 
 
 const UserCourse = require('./models/UserCourse');
 UserCourse.createTable().catch(err => {
@@ -42,28 +42,52 @@ app.use((req, res, next) => {
   
   // Determine if origin should be allowed
   let shouldAllowOrigin = false;
+  let allowedOrigin = null;
+  
   if (origin) {
     if (allowedOrigins.includes(origin)) {
       shouldAllowOrigin = true;
+      allowedOrigin = origin;
     } else if (origin.includes('localhost:5173') || origin.includes('cloudfront.net')) {
       // Explicitly allow localhost:5173 and any cloudfront domains
       shouldAllowOrigin = true;
+      allowedOrigin = origin;
     }
   }
   
-  // Always set CORS headers (browser requires them for preflight)
-  if (shouldAllowOrigin && origin) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
-  res.header('Access-Control-Max-Age', '86400'); // 24 hours
+  // Always set CORS headers (browser requires them for preflight and error responses)
+  // Set headers on every response, including errors
+  const setCorsHeaders = () => {
+    if (shouldAllowOrigin && allowedOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    }
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+    res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  };
+  
+  // Set headers immediately
+  setCorsHeaders();
   
   // Handle preflight OPTIONS request - must return 200 with headers
   if (req.method === 'OPTIONS') {
     return res.status(200).json({});
   }
+  
+  // Override res.json and res.status to ensure CORS headers are always included
+  const originalJson = res.json.bind(res);
+  const originalStatus = res.status.bind(res);
+  
+  res.json = function(data) {
+    setCorsHeaders();
+    return originalJson(data);
+  };
+  
+  res.status = function(code) {
+    setCorsHeaders();
+    return originalStatus(code);
+  };
   
   next();
 });
