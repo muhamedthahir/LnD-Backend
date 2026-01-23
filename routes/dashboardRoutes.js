@@ -7,5 +7,6 @@ router.get('/student', authenticate, authorize('student'), DashboardController.g
 router.get('/admin', authenticate, authorize('college_admin', 'primary_admin'), DashboardController.getAdminDashboard);
 
 
+
 module.exports = router;
 

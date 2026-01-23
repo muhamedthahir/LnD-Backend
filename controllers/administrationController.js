@@ -539,9 +539,18 @@ class AdministrationController {
         [userId, administration.course_id]
       );
 
-      // Get programming submissions
+      // Get programming submissions with best score, test cases, and code
       const [programmingSubmissions] = await pool.execute(
-        `SELECT ps_sub.*, q.name as question_text, q.name as question_title, ps.topic_id, ps.id as practice_segment_id
+        `SELECT ps_sub.id, ps_sub.user_id, ps_sub.programming_question_id, 
+                ps_sub.practice_segment_id, ps_sub.status,
+                ps_sub.best_submitted_code, ps_sub.last_submitted_code,
+                ps_sub.language_used, ps_sub.submission_count,
+                ps_sub.best_test_cases_passed, ps_sub.last_test_cases_passed,
+                ps_sub.test_cases_total, ps_sub.best_score, ps_sub.last_score,
+                ps_sub.max_score, ps_sub.first_submitted_at, ps_sub.last_submitted_at,
+                ps_sub.best_submitted_at, ps_sub.successful_submission,
+                q.name as question_text, q.name as question_title, 
+                ps.topic_id, ps.id as segment_id
          FROM programming_submissions ps_sub
          JOIN questions q ON ps_sub.programming_question_id = q.id
          JOIN practice_segments ps ON ps_sub.practice_segment_id = ps.id
@@ -600,16 +609,24 @@ class AdministrationController {
               const progForSegment = programmingSubmissions.filter(ps => ps.practice_segment_id === segment.id);
               progForSegment.forEach(prog => {
                 questions.push({
-                  id: prog.question_id,
+                  id: prog.programming_question_id,
                   question_text: prog.question_title || prog.question_text,
                   question_type: 'programming',
-                  is_correct: prog.is_correct,
-                  score: prog.score,
-                  max_score: prog.max_score,
-                  test_cases_passed: prog.test_cases_passed,
-                  test_cases_total: prog.test_cases_total,
+                  is_correct: prog.successful_submission || false,
+                  best_score: parseFloat(prog.best_score) || 0,
+                  last_score: parseFloat(prog.last_score) || 0,
+                  max_score: parseFloat(prog.max_score) || 100,
+                  best_test_cases_passed: prog.best_test_cases_passed || 0,
+                  last_test_cases_passed: prog.last_test_cases_passed || 0,
+                  test_cases_total: prog.test_cases_total || 0,
+                  attempt_count: prog.submission_count || 0,
                   status: prog.status,
-                  submitted_at: prog.submitted_at
+                  language_used: prog.language_used,
+                  best_submitted_code: prog.best_submitted_code,
+                  last_submitted_code: prog.last_submitted_code,
+                  first_submitted_at: prog.first_submitted_at,
+                  last_submitted_at: prog.last_submitted_at,
+                  best_submitted_at: prog.best_submitted_at
                 });
               });
             }
