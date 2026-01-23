@@ -6,6 +6,8 @@ const Status = require('../models/Status');
 const Option = require('../models/Option');
 const TestCase = require('../models/TestCase');
 const QuestionBank = require('../models/QuestionBank');
+const Category = require('../models/Category');
+const Tag = require('../models/Tag');
 const Institution = require('../models/Institution');
 const XLSX = require('xlsx');
 const pool = require('../config/db');
@@ -501,26 +503,12 @@ class QuestionController {
       // Create Excel template with required columns
       const workbook = XLSX.utils.book_new();
       const worksheetData = [
-        ['Question Title', 'Question Description', 'Option A', 'Option B', 'Option C', 'Option D', 'Correct Answer', 'Points', 'Negative Marks', 'Explanation', 'Hint', 'Level', 'Question Bank ID', 'Category ID', 'Status']
+        ['Question Title', 'Question Description', 'Option A', 'Option B', 'Option C', 'Option D', 'Correct Answer', 'Points', 'Negative Marks', 'Time to Solve (seconds)', 'Explanation', 'Hint', 'Level', 'Question Bank', 'Category', 'Tags', 'Status']
       ];
       
-      // Add example row
+      // Add empty first data row for dropdowns
       worksheetData.push([
-        'What is 2+2?',
-        'Simple addition question',
-        '3',
-        '4',
-        '5',
-        '6',
-        'B',
-        '1',
-        '0',
-        '2+2 equals 4',
-        'Think about basic addition',
-        'Easy',
-        '',
-        '',
-        'DRAFT'
+        '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''
       ]);
 
       const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
@@ -536,21 +524,37 @@ class QuestionController {
         { wch: 15 }, // Correct Answer (A, B, C, or D)
         { wch: 10 }, // Points
         { wch: 15 }, // Negative Marks
+        { wch: 20 }, // Time to Solve (seconds)
         { wch: 40 }, // Explanation
         { wch: 30 }, // Hint
         { wch: 15 }, // Level
-        { wch: 15 }, // Question Bank ID
-        { wch: 15 }, // Category ID
+        { wch: 25 }, // Question Bank
+        { wch: 20 }, // Category
+        { wch: 30 }, // Tags
         { wch: 15 }  // Status
       ];
 
-      // Add data validation for Correct Answer column (G column, index 6)
-      worksheet['!dataValidation'] = [{
-        sqref: 'G2:G1000',
-        type: 'list',
-        formula1: '"A,B,C,D"',
-        showDropDown: true
-      }];
+      // Add data validation for dropdowns
+      worksheet['!dataValidation'] = [
+        {
+          sqref: 'G2:G1000', // Correct Answer column
+          type: 'list',
+          formula1: '"A,B,C,D"',
+          showDropDown: true
+        },
+        {
+          sqref: 'M2:M1000', // Level column
+          type: 'list',
+          formula1: '"easy,medium,hard"',
+          showDropDown: true
+        },
+        {
+          sqref: 'Q2:Q1000', // Status column
+          type: 'list',
+          formula1: '"draft,review,published"',
+          showDropDown: true
+        }
+      ];
 
       XLSX.utils.book_append_sheet(workbook, worksheet, 'MCQ Questions');
       
@@ -611,17 +615,48 @@ class QuestionController {
         statusMap[status.name.toUpperCase()] = status.id;
       });
 
+      // Get question banks map for lookup by name
+      const userInstitutionId = currentUser.role === 'college_admin' 
+        ? await QuestionController.getInstitutionIdForUser(currentUser) 
+        : null;
+      
+      let questionBankQuery = 'SELECT id, name FROM question_banks WHERE active = TRUE';
+      let questionBankParams = [];
+      if (userInstitutionId) {
+        questionBankQuery += ' AND institution_id = ?';
+        questionBankParams.push(userInstitutionId);
+      }
+      const questionBanks = await pool.execute(questionBankQuery, questionBankParams);
+      const questionBankMap = {};
+      questionBanks[0].forEach(bank => {
+        questionBankMap[bank.name.toLowerCase()] = bank.id;
+      });
+
+      // Get categories map for lookup by name
+      const categories = await Category.getAll();
+      const categoryMap = {};
+      categories.forEach(cat => {
+        categoryMap[cat.name.toLowerCase()] = cat.id;
+      });
+
+      // Get tags map for lookup by name
+      const tags = await Tag.getAll();
+      const tagMap = {};
+      tags.forEach(tag => {
+        tagMap[tag.name.toLowerCase()] = tag.id;
+      });
+
       for (let i = 0; i < data.length; i++) {
         const row = data[i];
         const rowNum = i + 2; // +2 because row 1 is header, and arrays are 0-indexed
 
         try {
-          // Validate required fields
+          // Skip empty rows
           if (!row['Question Title'] || !row['Question Title'].toString().trim()) {
-            errors.push({ row: rowNum, error: 'Question Title is required' });
             continue;
           }
 
+          // Validate required fields
           if (!row['Option A'] || !row['Option B'] || !row['Option C'] || !row['Option D']) {
             errors.push({ row: rowNum, error: 'All four options (A, B, C, D) are required' });
             continue;
@@ -654,36 +689,77 @@ class QuestionController {
           // Get status ID (default to DRAFT)
           let statusId = draftStatus.id;
           if (row['Status']) {
-            const statusName = row['Status'].toString().trim().toUpperCase();
-            statusId = statusMap[statusName] || draftStatus.id;
+            const statusName = row['Status'].toString().trim().toLowerCase();
+            // Map lowercase status names to uppercase for lookup
+            const statusNameUpper = statusName.toUpperCase();
+            statusId = statusMap[statusNameUpper] || draftStatus.id;
           }
 
-          // Get question bank ID
+          // Get question bank ID by name
           let questionBankId = null;
-          if (row['Question Bank ID']) {
-            const bankId = parseInt(row['Question Bank ID']);
-            if (!isNaN(bankId)) {
-              // Verify question bank belongs to user's institution if college_admin
-              if (currentUser.role === 'college_admin') {
-                const questionBank = await QuestionBank.findById(bankId);
-                if (questionBank) {
-                  const userInstitutionId = await QuestionController.getInstitutionIdForUser(currentUser);
-                  if (questionBank.institution_id !== userInstitutionId) {
-                    errors.push({ row: rowNum, error: 'Question bank does not belong to your institution' });
-                    continue;
-                  }
-                }
+          if (row['Question Bank']) {
+            const bankName = row['Question Bank'].toString().trim();
+            if (bankName) {
+              const bankId = questionBankMap[bankName.toLowerCase()];
+              if (bankId) {
+                questionBankId = bankId;
+              } else {
+                errors.push({ row: rowNum, error: `Question bank "${bankName}" not found` });
+                continue;
               }
-              questionBankId = bankId;
             }
           }
 
-          // Get category ID
+          // Get category ID by name
           let categoryId = null;
-          if (row['Category ID']) {
-            const catId = parseInt(row['Category ID']);
-            if (!isNaN(catId)) {
-              categoryId = catId;
+          if (row['Category']) {
+            const catName = row['Category'].toString().trim();
+            if (catName) {
+              const catId = categoryMap[catName.toLowerCase()];
+              if (catId) {
+                categoryId = catId;
+              } else {
+                errors.push({ row: rowNum, error: `Category "${catName}" not found` });
+                continue;
+              }
+            }
+          }
+
+          // Get time to solve
+          let timeToSolve = null;
+          if (row['Time to Solve (seconds)']) {
+            const timeValue = parseFloat(row['Time to Solve (seconds)']);
+            if (!isNaN(timeValue) && timeValue > 0) {
+              timeToSolve = timeValue;
+            }
+          }
+
+          // Get tags (comma-separated)
+          const tagIds = [];
+          if (row['Tags']) {
+            const tagNames = row['Tags'].toString().trim();
+            if (tagNames) {
+              const tagNameArray = tagNames.split(',').map(t => t.trim()).filter(t => t);
+              for (const tagName of tagNameArray) {
+                const tagId = tagMap[tagName.toLowerCase()];
+                if (tagId) {
+                  tagIds.push(tagId);
+                } else {
+                  // Tag not found, create it
+                  try {
+                    const newTagId = await Tag.create({ name: tagName });
+                    tagIds.push(newTagId);
+                    tagMap[tagName.toLowerCase()] = newTagId;
+                  } catch (tagError) {
+                    // If tag creation fails (e.g., duplicate), try to find it again
+                    const existingTag = await Tag.findByName(tagName);
+                    if (existingTag) {
+                      tagIds.push(existingTag.id);
+                      tagMap[tagName.toLowerCase()] = existingTag.id;
+                    }
+                  }
+                }
+              }
             }
           }
 
@@ -698,11 +774,11 @@ class QuestionController {
             status_id: statusId,
             points: row['Points'] ? parseFloat(row['Points']) || 1 : 1,
             negative_marks: row['Negative Marks'] ? parseFloat(row['Negative Marks']) || 0 : 0,
-            time_to_solve: null,
+            time_to_solve: timeToSolve,
             explanation: row['Explanation'] ? row['Explanation'].toString().trim() : '',
             hint: row['Hint'] ? row['Hint'].toString().trim() : '',
             created_by: userId,
-            tags: []
+            tags: tagIds
           };
 
           const { id: questionId } = await Question.create(questionData);
