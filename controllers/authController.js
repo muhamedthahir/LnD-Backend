@@ -52,28 +52,52 @@ class AuthController {
   }
 
   static async login(req, res) {
+    // Set timeout for this specific request (20 seconds)
+    const timeoutId = setTimeout(() => {
+      if (!res.headersSent) {
+        console.error('Login request timeout');
+        return res.status(504).json({ 
+          error: 'Request timeout', 
+          message: 'Login request took too long. Please try again.' 
+        });
+      }
+    }, 20000);
+
     try {
       const { email, password, rememberMe } = req.body;
 
       if (!email || !password) {
+        clearTimeout(timeoutId);
         return res.status(400).json({ error: 'Email and password are required' });
       }
 
-      // Find user by email
+      // Find user by email with timeout handling
       let user;
       try {
-        user = await User.findByEmail(email);
+        // Use Promise.race to add timeout to database query
+        const userPromise = User.findByEmail(email);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database query timeout')), 15000)
+        );
+        
+        user = await Promise.race([userPromise, timeoutPromise]);
       } catch (error) {
+        clearTimeout(timeoutId);
         // Handle database connection errors
         if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
           console.error('Login error: Database connection issue:', error.message);
           return res.status(503).json({ error: 'Database connection error. Please try again.' });
+        }
+        if (error.message === 'Database query timeout') {
+          console.error('Login error: Database query timeout');
+          return res.status(504).json({ error: 'Database query timeout. Please try again.' });
         }
         console.error('Login error:', error);
         throw error;
       }
       
       if (!user) {
+        clearTimeout(timeoutId);
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
@@ -82,18 +106,21 @@ class AuthController {
         // User is logging in with OTP - check if OTP matches
         if (password === user.otp) {
           // OTP is correct, but password not set yet
+          clearTimeout(timeoutId);
           return res.json({
             requiresPasswordSetup: true,
             userId: user.id,
             message: 'OTP verified. Please set your password.'
           });
         } else {
+          clearTimeout(timeoutId);
           return res.status(401).json({ error: 'Invalid OTP' });
         }
       }
 
       // Check if password is set
       if (!user.password) {
+        clearTimeout(timeoutId);
         return res.status(401).json({ error: 'Please set your password first using the OTP sent to your email' });
       }
 
@@ -101,6 +128,7 @@ class AuthController {
       const isValidPassword = await bcrypt.compare(password, user.password);
       
       if (!isValidPassword) {
+        clearTimeout(timeoutId);
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
@@ -138,6 +166,8 @@ class AuthController {
 
       console.log('User logged in successfully. User ID:', user.id, 'Remember Me:', rememberMe);
 
+      clearTimeout(timeoutId);
+      
       // Return user data and tokens
       return res.json({
         message: 'Login successful',
@@ -155,6 +185,7 @@ class AuthController {
         }
       });
     } catch (error) {
+      clearTimeout(timeoutId);
       console.error('Login error:', error);
       return res.status(500).json({ error: 'Internal server error', details: error.message });
     }

@@ -17,17 +17,24 @@ POST https://d1qio8dibp2agp.cloudfront.net/api/questions net::ERR_FAILED 403 (Fo
    - When authentication middleware returns 401/403 errors, CORS headers weren't being included
    - Browser blocks the response because it can't see the CORS headers
 
-### 2. **CloudFront Configuration (Possible)**
+### 2. **504 Gateway Timeout Issues**
+   - Backend requests taking longer than CloudFront's default 30-second timeout
+   - Database queries hanging or taking too long
+   - No timeout handling in request middleware
+   - CORS headers not set on timeout responses
+
+### 3. **CloudFront Configuration (Possible)**
    - CloudFront might be blocking requests before they reach the backend
    - CloudFront response headers policy might not be forwarding CORS headers
    - CloudFront origin request policy might be blocking cross-origin requests
+   - CloudFront timeout settings might be too short
 
 ## Fix Applied
 
-### Backend CORS Middleware Update (`app.js`)
+### 1. Backend CORS Middleware Update (`app.js`)
 
 The CORS middleware has been updated to:
-1. **Always set CORS headers** - Even on error responses (401, 403, 500, etc.)
+1. **Always set CORS headers** - Even on error responses (401, 403, 500, 504, etc.)
 2. **Override `res.json()` and `res.status()`** - Ensures headers are set before any response is sent
 3. **Handle all CloudFront origins** - Automatically allows any `*.cloudfront.net` domain
 
@@ -35,6 +42,21 @@ The CORS middleware has been updated to:
 - CORS headers are now set using `res.setHeader()` which persists through error responses
 - Override `res.json()` and `res.status()` to ensure headers are always included
 - Headers are set both before `next()` and in the response methods
+
+### 2. Request Timeout Handling (`app.js`)
+
+Added request timeout middleware to prevent requests from hanging:
+- **25-second timeout** - Ensures requests complete before CloudFront's 30-second default timeout
+- **CORS headers on timeout** - Ensures CORS headers are set even when request times out
+- **504 response with CORS** - Returns proper timeout error with CORS headers
+
+### 3. Login Route Timeout Protection (`authController.js`)
+
+Added specific timeout handling for login route:
+- **20-second request timeout** - Prevents login from hanging indefinitely
+- **15-second database query timeout** - Uses `Promise.race()` to timeout slow database queries
+- **Proper cleanup** - Clears timeout on successful completion or error
+- **CORS headers on timeout** - Ensures browser can read timeout error responses
 
 ## Verification Steps
 
@@ -104,6 +126,11 @@ If errors persist after backend fix, check CloudFront:
 
 **Solution:** ✅ Fixed - OPTIONS requests now return 200 with proper CORS headers
 
+### Issue 4: 504 Gateway Timeout
+**Symptom:** Requests timeout after 30 seconds, no CORS headers in timeout response
+
+**Solution:** ✅ Fixed - Added request timeout middleware (25s) and database query timeouts (15s) with CORS headers
+
 ## Testing Checklist
 
 - [ ] OPTIONS preflight requests return 200 with CORS headers
@@ -111,7 +138,10 @@ If errors persist after backend fix, check CloudFront:
 - [ ] POST requests without auth return 401 with CORS headers
 - [ ] POST requests with insufficient permissions return 403 with CORS headers
 - [ ] Error responses (500) include CORS headers
+- [ ] Timeout responses (504) include CORS headers
+- [ ] Database timeout errors include CORS headers
 - [ ] All CloudFront origins are allowed
+- [ ] Requests complete within 25 seconds (before CloudFront timeout)
 
 ## Next Steps
 

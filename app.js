@@ -92,6 +92,26 @@ app.use((req, res, next) => {
   next();
 });
 
+// Request timeout middleware - ensures requests don't hang indefinitely
+app.use((req, res, next) => {
+  // Set a timeout for all requests (25 seconds to be under CloudFront's 30s default)
+  req.setTimeout(25000, () => {
+    if (!res.headersSent) {
+      // Ensure CORS headers are set even on timeout
+      const origin = req.headers.origin;
+      if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.status(504).json({ 
+        error: 'Gateway Timeout', 
+        message: 'Request timed out. Please try again.' 
+      });
+    }
+  });
+  next();
+});
+
 // Middleware
 app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ extended: true, limit: '500mb' }));

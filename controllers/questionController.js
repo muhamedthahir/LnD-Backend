@@ -7,6 +7,8 @@ const Option = require('../models/Option');
 const TestCase = require('../models/TestCase');
 const QuestionBank = require('../models/QuestionBank');
 const Institution = require('../models/Institution');
+const XLSX = require('xlsx');
+const pool = require('../config/db');
 
 class QuestionController {
   // Helper to get institution ID for college_admin
@@ -490,6 +492,252 @@ class QuestionController {
     } catch (error) {
       console.error('Get programming details error:', error);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  // Download MCQ bulk upload template
+  static async downloadBulkMcqTemplate(req, res) {
+    try {
+      // Create Excel template with required columns
+      const workbook = XLSX.utils.book_new();
+      const worksheetData = [
+        ['Question Title', 'Question Description', 'Option A', 'Option B', 'Option C', 'Option D', 'Correct Answer', 'Points', 'Negative Marks', 'Explanation', 'Hint', 'Level', 'Question Bank ID', 'Category ID', 'Status']
+      ];
+      
+      // Add example row
+      worksheetData.push([
+        'What is 2+2?',
+        'Simple addition question',
+        '3',
+        '4',
+        '5',
+        '6',
+        'B',
+        '1',
+        '0',
+        '2+2 equals 4',
+        'Think about basic addition',
+        'Easy',
+        '',
+        '',
+        'DRAFT'
+      ]);
+
+      const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+      
+      // Set column widths
+      worksheet['!cols'] = [
+        { wch: 30 }, // Question Title
+        { wch: 40 }, // Question Description
+        { wch: 30 }, // Option A
+        { wch: 30 }, // Option B
+        { wch: 30 }, // Option C
+        { wch: 30 }, // Option D
+        { wch: 15 }, // Correct Answer (A, B, C, or D)
+        { wch: 10 }, // Points
+        { wch: 15 }, // Negative Marks
+        { wch: 40 }, // Explanation
+        { wch: 30 }, // Hint
+        { wch: 15 }, // Level
+        { wch: 15 }, // Question Bank ID
+        { wch: 15 }, // Category ID
+        { wch: 15 }  // Status
+      ];
+
+      // Add data validation for Correct Answer column (G column, index 6)
+      worksheet['!dataValidation'] = [{
+        sqref: 'G2:G1000',
+        type: 'list',
+        formula1: '"A,B,C,D"',
+        showDropDown: true
+      }];
+
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'MCQ Questions');
+      
+      // Generate buffer
+      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+      
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=mcq_bulk_upload_template.xlsx');
+      res.send(buffer);
+    } catch (error) {
+      console.error('Download MCQ template error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  // Bulk upload MCQ questions from Excel
+  static async uploadBulkMcqQuestions(req, res) {
+    try {
+      const currentUser = req.user;
+      const userId = currentUser?.id;
+      
+      if (!req.file) {
+        return res.status(400).json({ error: 'Excel file is required' });
+      }
+
+      // Get MCQ question type
+      const mcqType = await QuestionType.findByName('MCQ');
+      if (!mcqType) {
+        return res.status(400).json({ error: 'MCQ question type not found. Please ensure question types are seeded.' });
+      }
+
+      // Get default status (DRAFT)
+      const draftStatus = await Status.findByName('DRAFT');
+      if (!draftStatus) {
+        return res.status(400).json({ error: 'DRAFT status not found. Please ensure statuses are seeded.' });
+      }
+
+      // Parse Excel file
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+      const createdQuestions = [];
+      const errors = [];
+
+      // Get levels map for lookup
+      const levels = await pool.execute('SELECT id, name FROM levels');
+      const levelMap = {};
+      levels[0].forEach(level => {
+        levelMap[level.name.toLowerCase()] = level.id;
+      });
+
+      // Get statuses map for lookup
+      const statuses = await pool.execute('SELECT id, name FROM statuses');
+      const statusMap = {};
+      statuses[0].forEach(status => {
+        statusMap[status.name.toUpperCase()] = status.id;
+      });
+
+      for (let i = 0; i < data.length; i++) {
+        const row = data[i];
+        const rowNum = i + 2; // +2 because row 1 is header, and arrays are 0-indexed
+
+        try {
+          // Validate required fields
+          if (!row['Question Title'] || !row['Question Title'].toString().trim()) {
+            errors.push({ row: rowNum, error: 'Question Title is required' });
+            continue;
+          }
+
+          if (!row['Option A'] || !row['Option B'] || !row['Option C'] || !row['Option D']) {
+            errors.push({ row: rowNum, error: 'All four options (A, B, C, D) are required' });
+            continue;
+          }
+
+          if (!row['Correct Answer'] || !['A', 'B', 'C', 'D'].includes(row['Correct Answer'].toString().toUpperCase())) {
+            errors.push({ row: rowNum, error: 'Correct Answer must be A, B, C, or D' });
+            continue;
+          }
+
+          // Map correct answer to option index
+          const correctAnswer = row['Correct Answer'].toString().toUpperCase();
+          const correctIndex = correctAnswer.charCodeAt(0) - 65; // A=0, B=1, C=2, D=3
+
+          // Build options array
+          const options = [
+            { text: row['Option A'].toString().trim(), is_correct: correctIndex === 0, order: 0, explanation: '' },
+            { text: row['Option B'].toString().trim(), is_correct: correctIndex === 1, order: 1, explanation: '' },
+            { text: row['Option C'].toString().trim(), is_correct: correctIndex === 2, order: 2, explanation: '' },
+            { text: row['Option D'].toString().trim(), is_correct: correctIndex === 3, order: 3, explanation: '' }
+          ];
+
+          // Get level ID
+          let levelId = null;
+          if (row['Level']) {
+            const levelName = row['Level'].toString().trim().toLowerCase();
+            levelId = levelMap[levelName] || null;
+          }
+
+          // Get status ID (default to DRAFT)
+          let statusId = draftStatus.id;
+          if (row['Status']) {
+            const statusName = row['Status'].toString().trim().toUpperCase();
+            statusId = statusMap[statusName] || draftStatus.id;
+          }
+
+          // Get question bank ID
+          let questionBankId = null;
+          if (row['Question Bank ID']) {
+            const bankId = parseInt(row['Question Bank ID']);
+            if (!isNaN(bankId)) {
+              // Verify question bank belongs to user's institution if college_admin
+              if (currentUser.role === 'college_admin') {
+                const questionBank = await QuestionBank.findById(bankId);
+                if (questionBank) {
+                  const userInstitutionId = await QuestionController.getInstitutionIdForUser(currentUser);
+                  if (questionBank.institution_id !== userInstitutionId) {
+                    errors.push({ row: rowNum, error: 'Question bank does not belong to your institution' });
+                    continue;
+                  }
+                }
+              }
+              questionBankId = bankId;
+            }
+          }
+
+          // Get category ID
+          let categoryId = null;
+          if (row['Category ID']) {
+            const catId = parseInt(row['Category ID']);
+            if (!isNaN(catId)) {
+              categoryId = catId;
+            }
+          }
+
+          // Create question
+          const questionData = {
+            name: row['Question Title'].toString().trim(),
+            description: row['Question Description'] ? row['Question Description'].toString().trim() : '',
+            level_id: levelId,
+            question_type_id: mcqType.id,
+            question_bank_id: questionBankId,
+            category_id: categoryId,
+            status_id: statusId,
+            points: row['Points'] ? parseFloat(row['Points']) || 1 : 1,
+            negative_marks: row['Negative Marks'] ? parseFloat(row['Negative Marks']) || 0 : 0,
+            time_to_solve: null,
+            explanation: row['Explanation'] ? row['Explanation'].toString().trim() : '',
+            hint: row['Hint'] ? row['Hint'].toString().trim() : '',
+            created_by: userId,
+            tags: []
+          };
+
+          const { id: questionId } = await Question.create(questionData);
+
+          // Create MCQ question record
+          const mcqQuestion = await MCQMultiSelectQuestion.findOrCreate(questionId, {
+            is_multi_select: false
+          });
+
+          // Create options
+          await Option.setOptions(mcqQuestion.id, options);
+
+          createdQuestions.push({
+            row: rowNum,
+            questionId,
+            name: questionData.name
+          });
+
+        } catch (error) {
+          console.error(`Error processing row ${rowNum}:`, error);
+          errors.push({ row: rowNum, error: error.message || 'Failed to create question' });
+        }
+      }
+
+      res.json({
+        message: `Bulk upload completed. ${createdQuestions.length} question(s) created, ${errors.length} error(s).`,
+        created: createdQuestions.length,
+        errors: errors.length,
+        createdQuestions,
+        errors: errors.length > 0 ? errors : undefined
+      });
+
+    } catch (error) {
+      console.error('Bulk upload MCQ error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   }
 }
