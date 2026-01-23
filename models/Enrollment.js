@@ -123,6 +123,41 @@ class Enrollment {
       [student_id, course_id]
     );
   }
+
+  /**
+   * Get all enrolled users for a specific administration with progress data
+   * @param {number} administration_id - The administration ID
+   * @returns {Array} - Array of enrolled users with their progress
+   */
+  static async findByAdministrationId(administration_id) {
+    const [rows] = await pool.execute(
+      `SELECT 
+        e.id as enrollment_id,
+        e.student_id,
+        e.status as enrollment_status,
+        e.enrolled_at,
+        u.id as user_id,
+        u.name as user_name,
+        u.email as user_email,
+        u.roll_number,
+        u.department,
+        u.college_name,
+        uc.progress_percentage,
+        uc.status as course_status,
+        uc.last_accessed_at,
+        uc.started_at,
+        uc.completed_at,
+        ca.course_id
+      FROM enrollments e
+      JOIN users u ON e.student_id = u.id
+      JOIN course_administrations ca ON e.administration_id = ca.id
+      LEFT JOIN user_courses uc ON uc.user_id = e.student_id AND uc.course_id = ca.course_id
+      WHERE e.administration_id = ?
+      ORDER BY u.name ASC`,
+      [administration_id]
+    );
+    return rows;
+  }
 }
 
 module.exports = Enrollment;

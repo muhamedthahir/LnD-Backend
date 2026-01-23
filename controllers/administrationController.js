@@ -3,6 +3,7 @@ const Enrollment = require('../models/Enrollment');
 const Group = require('../models/Group');
 const User = require('../models/User');
 const { generateTokens } = require('../utils/jwt');
+const pool = require('../config/db');
 
 class AdministrationController {
   /**
@@ -382,6 +383,275 @@ class AdministrationController {
       });
     } catch (error) {
       console.error('Delete administration error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Get comprehensive progress report for a user in an administration
+   */
+  static async getUserProgressReport(req, res) {
+    try {
+      const { id, userId } = req.params;
+      const currentUser = req.user;
+
+      // Check if administration exists
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only view progress from their institution
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only view progress from your institution' });
+      }
+
+      // Get user details
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // Get course details
+      const [courseRows] = await pool.execute(
+        `SELECT c.* FROM courses c WHERE c.id = ?`,
+        [administration.course_id]
+      );
+      const course = courseRows[0];
+
+      // Get course progress from user_courses
+      const [courseProgressRows] = await pool.execute(
+        `SELECT * FROM user_courses WHERE user_id = ? AND course_id = ?`,
+        [userId, administration.course_id]
+      );
+      const courseProgress = courseProgressRows[0] || {
+        status: 'not_started',
+        progress_percentage: 0,
+        started_at: null,
+        completed_at: null,
+        last_accessed_at: null
+      };
+
+      // Get topics for this course
+      const [topics] = await pool.execute(
+        `SELECT t.*, 
+          (SELECT COUNT(*) FROM segments WHERE topic_id = t.id) as lesson_count,
+          (SELECT COUNT(*) FROM practice_segments WHERE topic_id = t.id) as practice_count
+         FROM topics t 
+         WHERE t.course_id = ? 
+         ORDER BY t.order_index, t.id`,
+        [administration.course_id]
+      );
+
+      // Get topic progress for this user
+      const [topicProgress] = await pool.execute(
+        `SELECT * FROM user_topic_progress WHERE user_id = ? AND course_id = ?`,
+        [userId, administration.course_id]
+      );
+
+      // Create a map of topic progress
+      const topicProgressMap = {};
+      topicProgress.forEach(tp => {
+        topicProgressMap[tp.topic_id] = tp;
+      });
+
+      // Get all segments for all topics
+      const [segments] = await pool.execute(
+        `SELECT s.*, 'lesson' as segment_type 
+         FROM segments s 
+         JOIN topics t ON s.topic_id = t.id 
+         WHERE t.course_id = ?
+         UNION ALL
+         SELECT ps.id, ps.topic_id, ps.title, ps.description, ps.position, ps.created_at, ps.updated_at, 
+                ps.segment_type as segment_type
+         FROM practice_segments ps 
+         JOIN topics t ON ps.topic_id = t.id 
+         WHERE t.course_id = ?
+         ORDER BY topic_id, position`,
+        [administration.course_id, administration.course_id]
+      );
+
+      // Get segment progress for this user
+      const [segmentProgress] = await pool.execute(
+        `SELECT * FROM user_segment_progress WHERE user_id = ? AND course_id = ?`,
+        [userId, administration.course_id]
+      );
+
+      // Create a map of segment progress
+      const segmentProgressMap = {};
+      segmentProgress.forEach(sp => {
+        if (sp.segment_id) {
+          segmentProgressMap[`segment_${sp.segment_id}`] = sp;
+        } else if (sp.practice_segment_id) {
+          segmentProgressMap[`practice_${sp.practice_segment_id}`] = sp;
+        }
+      });
+
+      // Get MCQ submissions for practice segments
+      const [mcqSubmissions] = await pool.execute(
+        `SELECT ms.*, q.question_text, q.question_type, ps.topic_id
+         FROM mcq_submissions ms
+         JOIN questions q ON ms.mcq_question_id = q.id
+         JOIN practice_segments ps ON ms.practice_segment_id = ps.id
+         JOIN topics t ON ps.topic_id = t.id
+         WHERE ms.user_id = ? AND t.course_id = ?`,
+        [userId, administration.course_id]
+      );
+
+      // Get programming submissions
+      const [programmingSubmissions] = await pool.execute(
+        `SELECT s.*, q.question_text, q.title as question_title, ps.topic_id, ps.id as practice_segment_id
+         FROM submissions s
+         JOIN questions q ON s.question_id = q.id
+         JOIN practice_segments ps ON s.practice_segment_id = ps.id
+         JOIN topics t ON ps.topic_id = t.id
+         WHERE s.user_id = ? AND t.course_id = ?`,
+        [userId, administration.course_id]
+      );
+
+      // Build the comprehensive response
+      const topicsWithProgress = topics.map(topic => {
+        const progress = topicProgressMap[topic.id] || {
+          status: 'not_started',
+          progress_percentage: 0,
+          segments_completed: 0,
+          segments_total: (topic.lesson_count || 0) + (topic.practice_count || 0),
+          started_at: null,
+          completed_at: null
+        };
+
+        // Get segments for this topic
+        const topicSegments = segments
+          .filter(s => s.topic_id === topic.id)
+          .map(segment => {
+            const isLesson = segment.segment_type === 'lesson';
+            const key = isLesson ? `segment_${segment.id}` : `practice_${segment.id}`;
+            const segProgress = segmentProgressMap[key] || {
+              status: 'not_started',
+              progress_percentage: 0,
+              score: 0,
+              max_score: 0,
+              items_completed: 0,
+              items_total: 0,
+              started_at: null,
+              completed_at: null
+            };
+
+            // Get questions for this segment (if practice/assessment)
+            let questions = [];
+            if (!isLesson) {
+              // MCQ questions
+              const mcqForSegment = mcqSubmissions.filter(ms => ms.practice_segment_id === segment.id);
+              questions = mcqForSegment.map(mcq => ({
+                id: mcq.mcq_question_id,
+                question_text: mcq.question_text,
+                question_type: 'mcq',
+                is_correct: mcq.is_correct,
+                best_score: mcq.best_score,
+                last_score: mcq.last_score,
+                max_score: mcq.max_score,
+                attempt_count: mcq.attempt_count,
+                status: mcq.status,
+                last_answered_at: mcq.last_answered_at
+              }));
+
+              // Programming questions
+              const progForSegment = programmingSubmissions.filter(ps => ps.practice_segment_id === segment.id);
+              progForSegment.forEach(prog => {
+                questions.push({
+                  id: prog.question_id,
+                  question_text: prog.question_title || prog.question_text,
+                  question_type: 'programming',
+                  is_correct: prog.is_correct,
+                  score: prog.score,
+                  max_score: prog.max_score,
+                  test_cases_passed: prog.test_cases_passed,
+                  test_cases_total: prog.test_cases_total,
+                  status: prog.status,
+                  submitted_at: prog.submitted_at
+                });
+              });
+            }
+
+            return {
+              ...segment,
+              progress: segProgress,
+              questions
+            };
+          });
+
+        return {
+          ...topic,
+          progress,
+          segments: topicSegments
+        };
+      });
+
+      res.json({
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          college_name: user.college_name,
+          department: user.department,
+          roll_number: user.roll_number
+        },
+        course: {
+          id: course?.id,
+          name: course?.name,
+          description: course?.short_description || course?.description,
+          category: course?.category,
+          competency_level: course?.competency_level
+        },
+        administration: {
+          id: administration.id,
+          display_id: administration.display_id,
+          name: administration.administration_name,
+          start_date: administration.start_date,
+          end_date: administration.end_date
+        },
+        courseProgress: {
+          status: courseProgress.status,
+          progress_percentage: courseProgress.progress_percentage || 0,
+          started_at: courseProgress.started_at,
+          completed_at: courseProgress.completed_at,
+          last_accessed_at: courseProgress.last_accessed_at
+        },
+        topics: topicsWithProgress
+      });
+    } catch (error) {
+      console.error('Get user progress report error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Get enrolled users for an administration
+   */
+  static async getEnrolledUsers(req, res) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      // Check if administration exists
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only view enrollments from their institution
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only view enrollments from your institution' });
+      }
+
+      const enrolledUsers = await Enrollment.findByAdministrationId(id);
+
+      res.json({
+        enrolledUsers,
+        total: enrolledUsers.length
+      });
+    } catch (error) {
+      console.error('Get enrolled users error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   }

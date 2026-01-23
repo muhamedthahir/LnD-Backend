@@ -7,6 +7,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 router.post('/', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.create);
 router.get('/', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getAll);
 router.get('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getById);
+router.get('/:id/enrolled-users', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getEnrolledUsers);
+router.get('/:id/users/:userId/progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getUserProgressReport);
 router.put('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.update);
 router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.delete);
 router.post('/draft', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.saveAsDraft);
