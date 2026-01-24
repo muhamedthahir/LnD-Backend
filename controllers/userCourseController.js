@@ -10,11 +10,22 @@ class UserCourseController {
       const { courseId } = req.params;
       const userId = req.user.id;
 
-      // Check if user is enrolled
+      // Check if user is enrolled (checkCourseEnrollment already excludes expired)
       const enrollment = await Enrollment.checkCourseEnrollment(userId, parseInt(courseId));
       
       if (!enrollment) {
-        return res.status(403).json({ error: 'You are not enrolled in this course' });
+        return res.status(403).json({ error: 'You are not enrolled in this course or your enrollment has expired' });
+      }
+
+      // Double check enrollment status
+      if (enrollment.status === 'Expired') {
+        return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+      }
+
+      // Check if user_courses is already expired
+      const userCourse = await UserCourse.findByUserAndCourse(userId, parseInt(courseId));
+      if (userCourse && userCourse.status === 'expired') {
+        return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
       }
 
       // Create or update user-course relationship
@@ -51,6 +62,17 @@ class UserCourseController {
       const { courseId } = req.params;
       const userId = req.user.id;
 
+      // Check enrollment (excludes expired)
+      const enrollment = await Enrollment.checkCourseEnrollment(userId, parseInt(courseId));
+      if (!enrollment) {
+        return res.status(403).json({ error: 'You are not enrolled in this course or your enrollment has expired' });
+      }
+
+      // Double check enrollment status
+      if (enrollment.status === 'Expired') {
+        return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+      }
+
       const progress = await UserCourse.getProgressDetails(userId, parseInt(courseId));
       
       if (!progress) {
@@ -59,6 +81,11 @@ class UserCourseController {
           progress_percentage: 0,
           completed_segments: []
         });
+      }
+
+      // Check if user_courses is expired
+      if (progress.status === 'expired') {
+        return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
       }
 
       res.json(progress);
@@ -92,6 +119,23 @@ class UserCourseController {
     try {
       const { courseId, segmentId } = req.params;
       const userId = req.user.id;
+
+      // Check enrollment (excludes expired)
+      const enrollment = await Enrollment.checkCourseEnrollment(userId, parseInt(courseId));
+      if (!enrollment) {
+        return res.status(403).json({ error: 'You are not enrolled in this course or your enrollment has expired' });
+      }
+
+      // Double check enrollment status
+      if (enrollment.status === 'Expired') {
+        return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+      }
+
+      // Check if user_courses is expired
+      const userCourse = await UserCourse.findByUserAndCourse(userId, parseInt(courseId));
+      if (userCourse && userCourse.status === 'expired') {
+        return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+      }
 
       await UserCourse.markSegmentCompleted(userId, parseInt(courseId), parseInt(segmentId));
       const progress = await UserCourse.getProgressDetails(userId, parseInt(courseId));

@@ -974,11 +974,10 @@ class AdministrationController {
       // Get course_id from administration
       const courseId = administration.course_id;
 
-      // Update user_courses status to paused/expired (we'll use 'paused' as expired state)
-      // Also update the user_courses to mark as expired
+      // Update user_courses status to expired
       await pool.execute(
         `UPDATE user_courses 
-         SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+         SET status = 'expired', updated_at = CURRENT_TIMESTAMP
          WHERE user_id = ? AND course_id = ?`,
         [userId, courseId]
       );

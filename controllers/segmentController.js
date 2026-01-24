@@ -5,6 +5,8 @@ const PostClassPractice = require('../models/PostClassPractice');
 const s3Service = require('../services/s3Service');
 const Topic = require('../models/Topic');
 const Course = require('../models/Course');
+const Enrollment = require('../models/Enrollment');
+const UserCourse = require('../models/UserCourse');
 
 const VALID_SEGMENT_TYPES = ['coding', 'mcq', 'reference_videos', 'articles', 'assessment', 'lesson_text', 'lesson_video', 'lesson_audio', 'lesson_document'];
 
@@ -198,10 +200,34 @@ class SegmentController {
   static async getById(req, res) {
     try {
       const { id } = req.params;
+      const userId = req.user?.id;
       const segment = await Segment.getWithRelatedData(id);
       
       if (!segment) {
         return res.status(404).json({ error: 'Segment not found' });
+      }
+
+      // Check enrollment if user is a student
+      if (userId && req.user?.role === 'student') {
+        // Get course_id from segment's topic
+        const topic = await Topic.findById(segment.topic_id);
+        if (topic && topic.course_id) {
+          const enrollment = await Enrollment.checkCourseEnrollment(userId, topic.course_id);
+          if (!enrollment) {
+            return res.status(403).json({ error: 'You are not enrolled in this course or your enrollment has expired' });
+          }
+          
+          // Check if enrollment is expired
+          if (enrollment.status === 'Expired') {
+            return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+          }
+
+          // Check if user_courses is expired
+          const userCourse = await UserCourse.findByUserAndCourse(userId, topic.course_id);
+          if (userCourse && userCourse.status === 'expired') {
+            return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+          }
+        }
       }
 
       // Convert S3 URLs to presigned URLs

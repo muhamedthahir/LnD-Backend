@@ -33,6 +33,7 @@ class Enrollment {
     // Also include progress data from user_courses table
     let query = `SELECT 
       e.*,
+      e.status as enrollment_status,
       COALESCE(c.id, ca.course_id) as course_id,
       COALESCE(c.name, c2.name) as course_name,
       COALESCE(c.short_description, c2.short_description) as course_description,
@@ -46,7 +47,8 @@ class Enrollment {
       uc.progress_percentage,
       uc.status as user_course_status,
       uc.last_accessed_at,
-      uc.started_at
+      uc.started_at,
+      uc.completed_at
     FROM enrollments e
     LEFT JOIN courses c ON e.course_id = c.id
     LEFT JOIN course_administrations ca ON e.administration_id = ca.id
@@ -94,24 +96,28 @@ class Enrollment {
 
   /**
    * Check if a user is already enrolled in a course through any administration or direct enrollment
+   * Excludes expired enrollments
    * @param {number} student_id - The student/user ID
    * @param {number} course_id - The course ID
    * @returns {Object|null} - The existing enrollment if found, null otherwise
    */
   static async checkCourseEnrollment(student_id, course_id) {
-    // Check direct course enrollment
-    const directEnrollment = await this.checkEnrollment(student_id, course_id);
-    if (directEnrollment) {
-      return directEnrollment;
+    // Check direct course enrollment (excluding expired)
+    const [directEnrollments] = await pool.execute(
+      'SELECT * FROM enrollments WHERE student_id = ? AND course_id = ? AND status != ?',
+      [student_id, course_id, 'Expired']
+    );
+    if (directEnrollments.length > 0) {
+      return directEnrollments[0];
     }
 
-    // Check enrollment through any administration for this course
+    // Check enrollment through any administration for this course (excluding expired)
     const [rows] = await pool.execute(
       `SELECT e.* 
        FROM enrollments e
        INNER JOIN course_administrations ca ON e.administration_id = ca.id
-       WHERE e.student_id = ? AND ca.course_id = ?`,
-      [student_id, course_id]
+       WHERE e.student_id = ? AND ca.course_id = ? AND e.status != ?`,
+      [student_id, course_id, 'Expired']
     );
     
     return rows[0] || null;

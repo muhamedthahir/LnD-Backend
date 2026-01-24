@@ -196,7 +196,7 @@ class UserCourse {
         user_id INT NOT NULL,
         course_id INT NOT NULL,
         enrollment_id INT NULL,
-        status ENUM('in_progress', 'completed', 'paused', 'not_started') NOT NULL DEFAULT 'not_started',
+        status ENUM('in_progress', 'completed', 'paused', 'not_started', 'expired') NOT NULL DEFAULT 'not_started',
         progress_percentage INT DEFAULT 0,
         last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         started_at TIMESTAMP NULL,

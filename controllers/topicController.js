@@ -2,6 +2,8 @@ const Topic = require('../models/Topic');
 const Course = require('../models/Course');
 const Segment = require('../models/Segment');
 const s3Service = require('../services/s3Service');
+const Enrollment = require('../models/Enrollment');
+const UserCourse = require('../models/UserCourse');
 
 class TopicController {
   static async create(req, res) {
@@ -30,6 +32,27 @@ class TopicController {
   static async getByCourse(req, res) {
     try {
       const { course_id } = req.params;
+      const userId = req.user?.id;
+      
+      // Check enrollment if user is a student
+      if (userId && req.user?.role === 'student') {
+        const enrollment = await Enrollment.checkCourseEnrollment(userId, parseInt(course_id));
+        if (!enrollment) {
+          return res.status(403).json({ error: 'You are not enrolled in this course or your enrollment has expired' });
+        }
+        
+        // Check if enrollment is expired
+        if (enrollment.status === 'Expired') {
+          return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+        }
+
+        // Check if user_courses is expired
+        const userCourse = await UserCourse.findByUserAndCourse(userId, parseInt(course_id));
+        if (userCourse && userCourse.status === 'expired') {
+          return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+        }
+      }
+      
       const topics = await Topic.findByCourseId(course_id);
       res.json(topics);
     } catch (error) {
@@ -41,10 +64,30 @@ class TopicController {
   static async getById(req, res) {
     try {
       const { id } = req.params;
+      const userId = req.user?.id;
       const topic = await Topic.getWithSegments(id);
       
       if (!topic) {
         return res.status(404).json({ error: 'Topic not found' });
+      }
+
+      // Check enrollment if user is a student
+      if (userId && req.user?.role === 'student' && topic.course_id) {
+        const enrollment = await Enrollment.checkCourseEnrollment(userId, topic.course_id);
+        if (!enrollment) {
+          return res.status(403).json({ error: 'You are not enrolled in this course or your enrollment has expired' });
+        }
+        
+        // Check if enrollment is expired
+        if (enrollment.status === 'Expired') {
+          return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+        }
+
+        // Check if user_courses is expired
+        const userCourse = await UserCourse.findByUserAndCourse(userId, topic.course_id);
+        if (userCourse && userCourse.status === 'expired') {
+          return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
+        }
       }
 
       res.json(topic);
