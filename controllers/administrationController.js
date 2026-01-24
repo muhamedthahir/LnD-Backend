@@ -937,6 +937,66 @@ class AdministrationController {
       res.status(500).json({ error: 'Internal server error' });
     }
   }
+  /**
+   * Force expire a course for a specific user in an administration
+   */
+  static async forceExpireUser(req, res) {
+    try {
+      const { id, userId } = req.params;
+      const currentUser = req.user;
+
+      // Check if administration exists
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      // college_admin can only expire users from their institution
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only expire users from your institution' });
+      }
+
+      // Check if user is enrolled in this administration
+      const [enrollments] = await pool.execute(
+        'SELECT * FROM enrollments WHERE student_id = ? AND administration_id = ?',
+        [userId, id]
+      );
+
+      if (enrollments.length === 0) {
+        return res.status(404).json({ error: 'User is not enrolled in this administration' });
+      }
+
+      const enrollment = enrollments[0];
+
+      // Update enrollment status to Expired
+      await Enrollment.updateStatus(enrollment.id, 'Expired');
+
+      // Get course_id from administration
+      const courseId = administration.course_id;
+
+      // Update user_courses status to paused/expired (we'll use 'paused' as expired state)
+      // Also update the user_courses to mark as expired
+      await pool.execute(
+        `UPDATE user_courses 
+         SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ? AND course_id = ?`,
+        [userId, courseId]
+      );
+
+      // Log the force expiration action
+      console.log(`Force expired course for user ${userId} in administration ${id} by admin ${currentUser.id}`);
+
+      res.json({
+        message: 'Course force expired successfully for the user',
+        enrollment_id: enrollment.id,
+        user_id: parseInt(userId),
+        administration_id: parseInt(id)
+      });
+    } catch (error) {
+      console.error('Force expire user error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  }
 }
 
 module.exports = AdministrationController;

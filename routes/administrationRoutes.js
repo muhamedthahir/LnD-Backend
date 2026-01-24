@@ -11,6 +11,7 @@ router.get('/:id/enrolled-users', authenticate, authorize('college_admin', 'prim
 router.get('/:id/users/:userId/progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getUserProgressReport);
 router.post('/:id/update-progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.updateAllUsersProgress);
 router.get('/:id/progress-history', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getProgressUpdateHistory);
+router.post('/:id/users/:userId/force-expire', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.forceExpireUser);
 router.put('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.update);
 router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.delete);
 router.post('/draft', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.saveAsDraft);
