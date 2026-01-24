@@ -45,4 +45,3 @@ async function addExpiredStatusToUserCourses() {
 
 addExpiredStatusToUserCourses();
 
-

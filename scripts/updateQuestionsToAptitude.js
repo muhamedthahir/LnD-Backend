@@ -59,4 +59,3 @@ async function updateQuestionsToAptitude() {
 // Run the script
 updateQuestionsToAptitude();
 
-

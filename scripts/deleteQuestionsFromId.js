@@ -58,4 +58,3 @@ if (isNaN(startId)) {
 // Run the script
 deleteQuestionsFromId(startId);
 
-
