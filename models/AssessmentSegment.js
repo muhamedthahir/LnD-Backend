@@ -160,6 +160,15 @@ class AssessmentSegment {
     const segment = await this.findById(id);
     if (!segment) throw new Error('Segment not found');
 
+    // Convert undefined to null for SQL compatibility
+    const safeName = name !== undefined ? name : null;
+    const safeDescription = description !== undefined ? description : null;
+    const safeSequenceOrder = sequence_order !== undefined ? sequence_order : null;
+    const safeSegmentDuration = segment_duration !== undefined ? segment_duration : null;
+    const safeAllowBackNavigation = allow_back_navigation !== undefined ? allow_back_navigation : null;
+    const safeIsLocked = is_locked !== undefined ? is_locked : null;
+    const safeNegativeMarkingEnabled = negative_marking_enabled !== undefined ? negative_marking_enabled : null;
+
     try {
       await pool.execute(
         `UPDATE assessment_segments SET
@@ -171,8 +180,8 @@ class AssessmentSegment {
            is_locked = COALESCE(?, is_locked),
            negative_marking_enabled = ?
          WHERE id = ?`,
-        [name, description, sequence_order, segment_duration, 
-         allow_back_navigation, is_locked, negative_marking_enabled, id]
+        [safeName, safeDescription, safeSequenceOrder, safeSegmentDuration, 
+         safeAllowBackNavigation, safeIsLocked, safeNegativeMarkingEnabled, id]
       );
 
       // Update assessment total duration
@@ -264,10 +273,21 @@ class AssessmentSegment {
 
     // Get programming questions
     const [programmingQuestions] = await pool.execute(
-      `SELECT spq.*, q.name, q.description, q.level_id
+      `SELECT spq.*, 
+              pq.id as programming_question_id,
+              q.id as question_id,
+              q.name, 
+              q.description, 
+              q.level_id,
+              l.name as level_name,
+              q.points as default_weightage,
+              spq.positive_marks,
+              spq.negative_marks,
+              spq.neutral_marks
        FROM segment_programming_questions spq
        JOIN programming_questions pq ON spq.programming_question_id = pq.id
        JOIN questions q on pq.question_id = q.id
+       LEFT JOIN levels l ON q.level_id = l.id
        WHERE spq.assessment_segment_id = ?
        ORDER BY spq.sequence_order ASC`,
       [id]
@@ -275,10 +295,21 @@ class AssessmentSegment {
 
     // Get MCQ questions
     const [mcqQuestions] = await pool.execute(
-      `SELECT smq.*, q.name, q.description, q.level_id  as default_weightage
+      `SELECT smq.*,
+              mq.id as mcq_question_id,
+              q.id as question_id,
+              q.name, 
+              q.description, 
+              q.level_id,
+              l.name as level_name,
+              q.points as default_weightage,
+              smq.positive_marks,
+              smq.negative_marks,
+              smq.neutral_marks
        FROM segment_mcq_questions smq
        JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
        JOIN questions q ON mq.question_id = q.id
+       LEFT JOIN levels l ON q.level_id = l.id
        WHERE smq.assessment_segment_id = ?
        ORDER BY smq.sequence_order ASC`,
       [id]

@@ -257,12 +257,20 @@ class Assessment {
     const assessment = await this.findById(id);
     if (!assessment) return null;
 
-    const [segments] = await pool.execute(
-      `SELECT * FROM assessment_segments 
-       WHERE assessment_id = ? 
-       ORDER BY sequence_order ASC`,
-      [id]
-    );
+    const AssessmentSegment = require('./AssessmentSegment');
+    const segments = await AssessmentSegment.getByAssessmentId(id);
+    
+    // Get questions for each segment
+    for (const segment of segments) {
+      const segmentWithQuestions = await AssessmentSegment.getWithQuestions(segment.id);
+      if (segmentWithQuestions) {
+        segment.programming_questions = segmentWithQuestions.programming_questions || [];
+        segment.mcq_questions = segmentWithQuestions.mcq_questions || [];
+      } else {
+        segment.programming_questions = [];
+        segment.mcq_questions = [];
+      }
+    }
 
     assessment.segments = segments;
     return assessment;

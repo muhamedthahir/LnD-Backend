@@ -243,6 +243,38 @@ class AssessmentAdministrator {
       [id]
     );
     admin.question_config = questionRows[0] || null;
+    
+    // If random fetch is enabled, get segment-wise criteria
+    if (admin.question_config && admin.question_config.fetch_random_question) {
+      const AssessmentSegment = require('./AssessmentSegment');
+      const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+      const segmentQuestions = {};
+      
+      for (const segment of segments) {
+        const [criteriaRows] = await pool.execute(
+          'SELECT * FROM random_fetch_criteria WHERE assessment_segment_id = ? AND is_active = TRUE',
+          [segment.id]
+        );
+        
+        if (criteriaRows.length > 0) {
+          // Aggregate criteria (in case there are multiple for different question types)
+          const aggregated = criteriaRows.reduce((acc, c) => {
+            acc.total = (acc.total || 0) + (c.total_questions || 0);
+            acc.easy = (acc.easy || 0) + (c.easy_count || 0);
+            acc.medium = (acc.medium || 0) + (c.medium_count || 0);
+            acc.hard = (acc.hard || 0) + (c.hard_count || 0);
+            return acc;
+          }, { total: 0, easy: 0, medium: 0, hard: 0 });
+          
+          segmentQuestions[segment.id] = aggregated;
+        }
+      }
+      
+      // Add segment_questions to question_config
+      if (admin.question_config) {
+        admin.question_config.segment_questions = segmentQuestions;
+      }
+    }
 
     // Get access config
     const [accessRows] = await pool.execute(
@@ -360,6 +392,18 @@ class AssessmentAdministrator {
         is_default
       } = adminData;
 
+      // Convert undefined to null for all fields to prevent MySQL errors
+      const displayNameValue = display_name !== undefined ? display_name : null;
+      const configNameValue = config_name !== undefined ? config_name : null;
+      const targetAudienceValue = target_audience !== undefined ? target_audience : null;
+      const categoryIdValue = category_id !== undefined ? category_id : null;
+      const jobRoleValue = job_role !== undefined ? job_role : null;
+      const experienceValue = experience !== undefined ? experience : null;
+      const instructionPageValue = instruction_page !== undefined ? instruction_page : null;
+      const mailerTemplateIdValue = mailer_template_id !== undefined ? mailer_template_id : null;
+      const statusValue = status !== undefined ? status : null;
+      const isDefaultValue = is_default !== undefined ? is_default : null;
+
       // If setting as default, unset other defaults
       if (is_default) {
         const admin = await this.findById(id);
@@ -383,14 +427,17 @@ class AssessmentAdministrator {
            status = COALESCE(?, status),
            is_default = COALESCE(?, is_default)
          WHERE id = ?`,
-        [display_name, config_name, target_audience, category_id,
-         job_role, experience, instruction_page, mailer_template_id,
-         status, is_default, id]
+        [displayNameValue, configNameValue, targetAudienceValue, categoryIdValue,
+         jobRoleValue, experienceValue, instructionPageValue, mailerTemplateIdValue,
+         statusValue, isDefaultValue, id]
       );
 
       // Update timing config if provided
       if (configData.timing) {
         const tc = configData.timing;
+        // Convert undefined to null
+        const startDateTime = tc.start_date_time !== undefined ? tc.start_date_time : null;
+        const endDateTime = tc.end_date_time !== undefined ? tc.end_date_time : null;
         await connection.execute(
           `UPDATE timing_configs SET
              total_time = COALESCE(?, total_time),
@@ -402,7 +449,7 @@ class AssessmentAdministrator {
              auto_submit_on_timeout = COALESCE(?, auto_submit_on_timeout),
              grace_period_seconds = COALESCE(?, grace_period_seconds)
            WHERE assessment_administrator_id = ?`,
-          [tc.total_time, tc.timing_mode, tc.start_date_time, tc.end_date_time,
+          [tc.total_time, tc.timing_mode, startDateTime, endDateTime,
            tc.allow_early_segment_submit, tc.carry_forward_time, tc.auto_submit_on_timeout,
            tc.grace_period_seconds, id]
         );
@@ -457,11 +504,66 @@ class AssessmentAdministrator {
           [qc.fetch_random_question, qc.randomize_question_to_users,
            qc.shuffle_options_in_mcq, qc.allow_review_before_submit, id]
         );
+        
+        // Handle segment-wise randomization if fetch_random_question is enabled
+        if (qc.fetch_random_question && qc.segment_questions) {
+          const RandomFetchCriteria = require('./AssessmentConfigs').RandomFetchCriteria;
+          const AssessmentSegment = require('./AssessmentSegment');
+          
+          // Get assessment_id to get all segments
+          const admin = await this.findById(id);
+          if (admin && admin.assessment_id) {
+            const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+            
+            // For each segment with randomization data, create/update random_fetch_criteria
+            for (const segment of segments) {
+              const segmentQ = qc.segment_questions[segment.id];
+              if (segmentQ && segmentQ.total > 0) {
+                // Check if criteria already exists for this segment
+                const [existingCriteria] = await connection.execute(
+                  'SELECT id FROM random_fetch_criteria WHERE assessment_segment_id = ? AND is_active = TRUE',
+                  [segment.id]
+                );
+                
+                if (existingCriteria.length > 0) {
+                  // Update existing criteria (update the first one, or we could aggregate)
+                  await connection.execute(
+                    `UPDATE random_fetch_criteria SET
+                       total_questions = ?,
+                       easy_count = ?,
+                       medium_count = ?,
+                       hard_count = ?
+                     WHERE id = ?`,
+                    [segmentQ.total || 0, segmentQ.easy || 0, segmentQ.medium || 0, segmentQ.hard || 0, existingCriteria[0].id]
+                  );
+                } else {
+                  // Create new criteria for both PROGRAMMING and MCQ (or create combined)
+                  // For simplicity, create one criteria that applies to both types
+                  await connection.execute(
+                    `INSERT INTO random_fetch_criteria 
+                     (assessment_segment_id, question_type, total_questions, easy_count, medium_count, hard_count, is_active)
+                     VALUES (?, 'ALL', ?, ?, ?, ?, TRUE)`,
+                    [segment.id, segmentQ.total || 0, segmentQ.easy || 0, segmentQ.medium || 0, segmentQ.hard || 0]
+                  );
+                }
+              } else {
+                // If segment has no randomization data, deactivate existing criteria
+                await connection.execute(
+                  'UPDATE random_fetch_criteria SET is_active = FALSE WHERE assessment_segment_id = ?',
+                  [segment.id]
+                );
+              }
+            }
+          }
+        }
       }
 
       // Update access config if provided
       if (configData.access) {
         const ac = configData.access;
+        // Convert undefined to null
+        const accessCode = ac.access_code !== undefined ? ac.access_code : null;
+        const ipRestriction = ac.ip_restriction !== undefined ? ac.ip_restriction : null;
         await connection.execute(
           `UPDATE access_configs SET
              access_code = ?,
@@ -470,8 +572,8 @@ class AssessmentAdministrator {
              resume_window_minutes = COALESCE(?, resume_window_minutes),
              ip_restriction = ?
            WHERE assessment_administrator_id = ?`,
-          [ac.access_code, ac.max_attempts, ac.allow_resume,
-           ac.resume_window_minutes, ac.ip_restriction, id]
+          [accessCode, ac.max_attempts, ac.allow_resume,
+           ac.resume_window_minutes, ipRestriction, id]
         );
       }
 

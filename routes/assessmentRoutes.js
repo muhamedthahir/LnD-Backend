@@ -26,8 +26,10 @@ router.patch('/segments/:id/reorder', authenticate, authorize('primary_admin', '
 
 // Segment Questions
 router.post('/segments/programming-questions', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.addProgrammingQuestion);
+router.patch('/segments/programming-questions/:segment_id/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateProgrammingQuestion);
 router.delete('/segments/:segment_id/programming-questions/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.removeProgrammingQuestion);
 router.post('/segments/mcq-questions', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.addMCQQuestion);
+router.patch('/segments/mcq-questions/:segment_id/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateMCQQuestion);
 router.delete('/segments/:segment_id/mcq-questions/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.removeMCQQuestion);
 
 // Random Fetch Criteria
@@ -56,8 +58,15 @@ router.get('/mappings/:mapping_id/result', authenticate, assessmentController.ge
 // My Assessments
 router.get('/my-assessments', authenticate, assessmentController.getMyAssessments);
 
-// Start Assessment
+// Get Start Info (before starting)
+router.get('/user/assessments/:mapping_id/start-info', authenticate, assessmentController.getStartInfo);
+
+// Start Assessment (both routes for compatibility)
+router.post('/user/assessments/:mapping_id/start', authenticate, assessmentController.startAssessment);
 router.post('/take/:mapping_id/start', authenticate, assessmentController.startAssessment);
+
+// Get Assessment Take Data (in progress assessment)
+router.get('/user/assessments/:mapping_id/take', authenticate, assessmentController.getAssessmentTake);
 
 // Get Questions for a Segment
 router.get('/take/:mapping_id/segments/:segment_id/questions', authenticate, assessmentController.getAssessmentQuestions);

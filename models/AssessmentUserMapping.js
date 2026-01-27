@@ -87,7 +87,7 @@ class AssessmentUserMapping {
     const unique_id = this.generateUniqueId();
 
     // Check max attempts
-    const AccessConfig = require('./AccessConfig');
+    const { AccessConfig } = require('./AssessmentConfigs');
     const accessConfig = await AccessConfig.findByAdminId(assessment_administrator_id);
     const maxAttempts = accessConfig?.max_attempts || 1;
 
@@ -239,6 +239,7 @@ class AssessmentUserMapping {
     const offset = (page - 1) * pageSize;
     let query = `
       SELECT aum.*,
+             aum.id as user_mapping_id,
              aa.display_name as administrator_name,
              a.title as assessment_title, a.description as assessment_description,
              tc.total_time, tc.start_date_time, tc.end_date_time
@@ -290,13 +291,18 @@ class AssessmentUserMapping {
     const mapping = await this.findById(id);
     if (!mapping) throw new Error('Mapping not found');
 
-    // Check if already started
+    // Check if already started - allow starting from INVITED or NOT_STARTED
     if (mapping.status === 'IN_PROGRESS') {
       throw new Error('Assessment already in progress');
     }
 
-    if (mapping.status === 'COMPLETED') {
+    if (mapping.status === 'COMPLETED' || mapping.status === 'SUBMITTED') {
       throw new Error('Assessment already completed');
+    }
+
+    // Allow starting from INVITED, NOT_STARTED, or PAUSED
+    if (!['INVITED', 'NOT_STARTED', 'PAUSED'].includes(mapping.status)) {
+      throw new Error(`Cannot start assessment from ${mapping.status} status`);
     }
 
     // Check timing
@@ -366,43 +372,74 @@ class AssessmentUserMapping {
       if (config.fetch_random_question) {
         // Fetch random questions
         const result = await this.fetchRandomQuestionsForSegment(segment.id, mapping_id);
-        programmingQuestions = result.programming;
-        mcqQuestions = result.mcq;
+        programmingQuestions = result.programming || [];
+        mcqQuestions = result.mcq || [];
+        console.log(`Segment ${segment.id} (${segment.name}): Fetched ${programmingQuestions.length} programming, ${mcqQuestions.length} MCQ questions (random)`);
       } else {
         // Get static questions from segment
-        const [pq] = await pool.execute(
-          `SELECT spq.*, pq.weightage as default_weightage
-           FROM segment_programming_questions spq
-           JOIN programming_questions pq ON spq.programming_question_id = pq.id
-           WHERE spq.assessment_segment_id = ?
-           ORDER BY spq.sequence_order`,
-          [segment.id]
-        );
-        programmingQuestions = pq.map(q => ({
-          question_id: q.programming_question_id,
-          sequence_order: q.sequence_order,
-          weightage: q.weightage_override || q.default_weightage,
-          is_from_random_fetch: false
-        }));
+        try {
+          const [pq] = await pool.execute(
+            `SELECT spq.*, pq.points as default_weightage, pq.id as programming_question_id
+             FROM segment_programming_questions spq
+             JOIN programming_questions pq ON spq.programming_question_id = pq.id
+             WHERE spq.assessment_segment_id = ?
+             ORDER BY spq.sequence_order`,
+            [segment.id]
+          );
+          console.log(`Segment ${segment.id} (${segment.name}): Raw programming questions query returned ${pq.length} rows`);
+          programmingQuestions = pq.map(q => ({
+            question_id: q.programming_question_id,
+            sequence_order: q.sequence_order || 1,
+            weightage: q.weightage_override || q.default_weightage || q.positive_marks || 0,
+            is_from_random_fetch: false
+          }));
+        } catch (error) {
+          console.error(`Error fetching programming questions for segment ${segment.id}:`, error);
+          programmingQuestions = [];
+        }
 
-        const [mq] = await pool.execute(
-          `SELECT smq.*, mq.weightage as default_weightage
-           FROM segment_mcq_questions smq
-           JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
-           WHERE smq.assessment_segment_id = ?
-           ORDER BY smq.sequence_order`,
+        try {
+          const [mq] = await pool.execute(
+            `SELECT smq.*, mq.points as default_weightage, mq.id as mcq_question_id
+             FROM segment_mcq_questions smq
+             JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
+             WHERE smq.assessment_segment_id = ?
+             ORDER BY smq.sequence_order`,
+            [segment.id]
+          );
+          console.log(`Segment ${segment.id} (${segment.name}): Raw MCQ questions query returned ${mq.length} rows`);
+          mcqQuestions = mq.map(q => ({
+            question_id: q.mcq_question_id,
+            sequence_order: q.sequence_order || 1,
+            weightage: q.weightage_override || q.default_weightage || q.positive_marks || 0,
+            is_from_random_fetch: false
+          }));
+        } catch (error) {
+          console.error(`Error fetching MCQ questions for segment ${segment.id}:`, error);
+          mcqQuestions = [];
+        }
+        
+        console.log(`Segment ${segment.id} (${segment.name}): Found ${programmingQuestions.length} programming, ${mcqQuestions.length} MCQ questions (static)`);
+        
+        // Debug: Check if questions exist in segment tables
+        const [checkProg] = await pool.execute(
+          'SELECT COUNT(*) as count FROM segment_programming_questions WHERE assessment_segment_id = ?',
           [segment.id]
         );
-        mcqQuestions = mq.map(q => ({
-          question_id: q.mcq_question_id,
-          sequence_order: q.sequence_order,
-          weightage: q.weightage_override || q.default_weightage,
-          is_from_random_fetch: false
-        }));
+        const [checkMCQ] = await pool.execute(
+          'SELECT COUNT(*) as count FROM segment_mcq_questions WHERE assessment_segment_id = ?',
+          [segment.id]
+        );
+        console.log(`Segment ${segment.id} (${segment.name}): Database has ${checkProg[0]?.count || 0} programming and ${checkMCQ[0]?.count || 0} MCQ questions in segment tables`);
+      }
+
+      // Warn if segment has no questions
+      if (programmingQuestions.length === 0 && mcqQuestions.length === 0) {
+        console.warn(`WARNING: Segment ${segment.id} (${segment.name}) has no questions assigned!`);
       }
 
       // Randomize if needed
-      if (config.randomize_question_to_users) {
+      if (config.randomize_question_to_users && (programmingQuestions.length > 0 || mcqQuestions.length > 0)) {
         programmingQuestions = this.shuffleArray(programmingQuestions);
         mcqQuestions = this.shuffleArray(mcqQuestions);
         
@@ -411,32 +448,61 @@ class AssessmentUserMapping {
         mcqQuestions.forEach((q, i) => q.sequence_order = programmingQuestions.length + i + 1);
       }
 
-      // Insert question assignments
-      for (const q of programmingQuestions) {
-        await pool.execute(
-          `INSERT INTO user_question_assignments 
-           (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
-           VALUES (?, ?, 'PROGRAMMING', ?, ?, ?, ?)`,
-          [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
+      // Check if questions are already assigned for this segment
+      const [existingAssignments] = await pool.execute(
+        'SELECT COUNT(*) as count FROM user_question_assignments WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
+        [mapping_id, segment.id]
+      );
+
+      // Only insert if no assignments exist
+      if (existingAssignments[0].count === 0) {
+        // Insert question assignments
+        for (const q of programmingQuestions) {
+          try {
+            await pool.execute(
+              `INSERT IGNORE INTO user_question_assignments 
+               (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
+               VALUES (?, ?, 'PROGRAMMING', ?, ?, ?, ?)`,
+              [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
+            );
+          } catch (error) {
+            console.error(`Error inserting programming question ${q.question_id} for segment ${segment.id}:`, error);
+          }
+        }
+
+        for (const q of mcqQuestions) {
+          try {
+            await pool.execute(
+              `INSERT IGNORE INTO user_question_assignments 
+               (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
+               VALUES (?, ?, 'MCQ', ?, ?, ?, ?)`,
+              [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
+            );
+          } catch (error) {
+            console.error(`Error inserting MCQ question ${q.question_id} for segment ${segment.id}:`, error);
+          }
+        }
+        
+        // Verify assignments were created
+        const [verifyAssignments] = await pool.execute(
+          'SELECT COUNT(*) as count FROM user_question_assignments WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
+          [mapping_id, segment.id]
         );
+        console.log(`Segment ${segment.id} (${segment.name}): Created ${verifyAssignments[0].count} question assignments`);
+      } else {
+        console.log(`Segment ${segment.id} (${segment.name}): Questions already assigned (${existingAssignments[0].count} existing)`);
       }
 
-      for (const q of mcqQuestions) {
-        await pool.execute(
-          `INSERT INTO user_question_assignments 
-           (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
-           VALUES (?, ?, 'MCQ', ?, ?, ?, ?)`,
-          [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
-        );
-      }
-
-      // Create segment progress
+      // Create or update segment progress
       const totalQuestions = programmingQuestions.length + mcqQuestions.length;
       await pool.execute(
         `INSERT INTO assessment_segment_progress 
          (assessment_user_mapping_id, assessment_segment_id, status, time_allocated, total_questions)
-         VALUES (?, ?, 'NOT_STARTED', ?, ?)`,
-        [mapping_id, segment.id, segment.segment_duration, totalQuestions]
+         VALUES (?, ?, 'NOT_STARTED', ?, ?)
+         ON DUPLICATE KEY UPDATE 
+         time_allocated = VALUES(time_allocated),
+         total_questions = VALUES(total_questions)`,
+        [mapping_id, segment.id, segment.segment_duration || 0, totalQuestions]
       );
     }
 

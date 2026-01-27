@@ -1,3 +1,4 @@
+const pool = require('../config/db');
 const Assessment = require('../models/Assessment');
 const AssessmentSegment = require('../models/AssessmentSegment');
 const AssessmentAdministrator = require('../models/AssessmentAdministrator');
@@ -321,13 +322,50 @@ const reorderSegment = async (req, res) => {
  */
 const addProgrammingQuestion = async (req, res) => {
   try {
-    const { segment_id, question_id, weightage_override = null, is_mandatory } = req.body;
+    const { segment_id, assessment_segment_id, question_id, programming_question_ids, weightage_override = null, is_mandatory } = req.body;
 
+    // Support both single and bulk add
+    const segmentId = segment_id || assessment_segment_id;
+    
+    // If programming_question_ids array is provided, do bulk add
+    if (programming_question_ids && Array.isArray(programming_question_ids)) {
+      const results = [];
+      const errors = [];
+      
+      for (const qId of programming_question_ids) {
+        try {
+          const id = await SegmentProgrammingQuestion.add({
+            assessment_segment_id: segmentId,
+            question_id: qId,
+            weightage_override: weightage_override !== undefined ? weightage_override : null,
+            is_mandatory: is_mandatory !== undefined ? is_mandatory : true
+          });
+          results.push(id);
+        } catch (error) {
+          if (error.code !== 'ER_DUP_ENTRY') {
+            errors.push({ question_id: qId, error: error.message });
+          }
+        }
+      }
+      
+      if (errors.length > 0 && results.length === 0) {
+        return res.status(500).json({ error: 'Failed to add questions', errors });
+      }
+      
+      return res.status(201).json({
+        message: `Added ${results.length} question(s) successfully${errors.length > 0 ? `, ${errors.length} failed` : ''}`,
+        added: results.length,
+        failed: errors.length,
+        ids: results
+      });
+    }
+    
+    // Single question add (original behavior)
     const id = await SegmentProgrammingQuestion.add({
-      assessment_segment_id: segment_id,
+      assessment_segment_id: segmentId,
       question_id,
-      weightage_override,
-      is_mandatory
+      weightage_override: weightage_override !== undefined ? weightage_override : null,
+      is_mandatory: is_mandatory !== undefined ? is_mandatory : true
     });
 
     res.status(201).json({
@@ -362,13 +400,50 @@ const removeProgrammingQuestion = async (req, res) => {
  */
 const addMCQQuestion = async (req, res) => {
   try {
-    const { segment_id, question_id, weightage_override = null, is_mandatory } = req.body;
+    const { segment_id, assessment_segment_id, question_id, mcq_question_ids, weightage_override = null, is_mandatory } = req.body;
 
+    // Support both single and bulk add
+    const segmentId = segment_id || assessment_segment_id;
+    
+    // If mcq_question_ids array is provided, do bulk add
+    if (mcq_question_ids && Array.isArray(mcq_question_ids)) {
+      const results = [];
+      const errors = [];
+      
+      for (const qId of mcq_question_ids) {
+        try {
+          const id = await SegmentMCQQuestion.add({
+            assessment_segment_id: segmentId,
+            question_id: qId,
+            weightage_override: weightage_override !== undefined ? weightage_override : null,
+            is_mandatory: is_mandatory !== undefined ? is_mandatory : true
+          });
+          results.push(id);
+        } catch (error) {
+          if (error.code !== 'ER_DUP_ENTRY') {
+            errors.push({ question_id: qId, error: error.message });
+          }
+        }
+      }
+      
+      if (errors.length > 0 && results.length === 0) {
+        return res.status(500).json({ error: 'Failed to add questions', errors });
+      }
+      
+      return res.status(201).json({
+        message: `Added ${results.length} question(s) successfully${errors.length > 0 ? `, ${errors.length} failed` : ''}`,
+        added: results.length,
+        failed: errors.length,
+        ids: results
+      });
+    }
+    
+    // Single question add (original behavior)
     const id = await SegmentMCQQuestion.add({
-      assessment_segment_id: segment_id,
+      assessment_segment_id: segmentId,
       question_id,
-      weightage_override,
-      is_mandatory
+      weightage_override: weightage_override !== undefined ? weightage_override : null,
+      is_mandatory: is_mandatory !== undefined ? is_mandatory : true
     });
 
     res.status(201).json({
@@ -395,6 +470,48 @@ const removeMCQQuestion = async (req, res) => {
   } catch (error) {
     console.error('Error removing MCQ question:', error);
     res.status(500).json({ error: 'Failed to remove MCQ question' });
+  }
+};
+
+/**
+ * Update programming question in segment (override score, marks, etc.)
+ */
+const updateProgrammingQuestion = async (req, res) => {
+  try {
+    const { segment_id, question_id } = req.params;
+    const updateData = req.body;
+
+    await SegmentProgrammingQuestion.update(
+      parseInt(segment_id),
+      parseInt(question_id),
+      updateData
+    );
+
+    res.json({ message: 'Question updated successfully' });
+  } catch (error) {
+    console.error('Error updating programming question:', error);
+    res.status(500).json({ error: 'Failed to update question' });
+  }
+};
+
+/**
+ * Update MCQ question in segment (override score, marks, etc.)
+ */
+const updateMCQQuestion = async (req, res) => {
+  try {
+    const { segment_id, question_id } = req.params;
+    const updateData = req.body;
+
+    await SegmentMCQQuestion.update(
+      parseInt(segment_id),
+      parseInt(question_id),
+      updateData
+    );
+
+    res.json({ message: 'Question updated successfully' });
+  } catch (error) {
+    console.error('Error updating MCQ question:', error);
+    res.status(500).json({ error: 'Failed to update question' });
   }
 };
 
@@ -584,6 +701,77 @@ const getMyAssessments = async (req, res) => {
 };
 
 /**
+ * Get assessment start info (before starting)
+ */
+const getStartInfo = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    // Get mapping
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    // Verify user
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Get administrator with all configs
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    if (!admin) {
+      return res.status(404).json({ error: 'Administrator not found' });
+    }
+
+    // Get segments
+    const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+
+    // Calculate total questions
+    let totalQuestions = 0;
+    segments.forEach(segment => {
+      const progCount = segment.programming_question_count || 0;
+      const mcqCount = segment.mcq_question_count || 0;
+      totalQuestions += progCount + mcqCount;
+    });
+
+    // Build response
+    const response = {
+      display_name: admin.display_name,
+      assessment_title: admin.assessment_title,
+      total_duration: admin.timing_config?.total_time || 0,
+      segment_count: segments.length,
+      total_questions: totalQuestions,
+      threshold_for_pass: admin.scoring_config?.threshold_for_pass || 40,
+      instruction_page: admin.instruction_page,
+      requires_access_code: !!admin.access_config?.access_code,
+      proctoring_enabled: admin.proctoring_config?.proctoring_enabled || false,
+      full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
+      webcam_required: admin.proctoring_config?.webcam_required || false,
+      max_tab_switch_allowed: admin.proctoring_config?.max_tab_switch_allowed ?? -1,
+      disable_copy_paste: admin.proctoring_config?.disable_copy_paste || false,
+      auto_submit_on_timeout: admin.timing_config?.auto_submit_on_timeout || false,
+      allow_back_navigation: admin.timing_config?.allow_early_segment_submit !== false, // Default true
+      negative_marking_enabled: admin.scoring_config?.negative_marking_enabled || false,
+      negative_mark_percentage: admin.scoring_config?.negative_mark_percentage || 0,
+      allow_resume: admin.access_config?.allow_resume !== false, // Default true
+      resume_window_minutes: admin.access_config?.resume_window_minutes || 30,
+      segments: segments.map(segment => ({
+        id: segment.id,
+        name: segment.name,
+        segment_duration: segment.segment_duration,
+        question_count: (segment.programming_question_count || 0) + (segment.mcq_question_count || 0)
+      }))
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching start info:', error);
+    res.status(500).json({ error: 'Failed to fetch assessment details' });
+  }
+};
+
+/**
  * Start assessment
  */
 const startAssessment = async (req, res) => {
@@ -620,6 +808,325 @@ const startAssessment = async (req, res) => {
   } catch (error) {
     console.error('Error starting assessment:', error);
     res.status(500).json({ error: error.message || 'Failed to start assessment' });
+  }
+};
+
+/**
+ * Get assessment data for taking (in progress assessment)
+ */
+const getAssessmentTake = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    // Get mapping
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    // Verify user
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Check if assessment is in progress or can be started
+    if (!['IN_PROGRESS', 'INVITED', 'NOT_STARTED', 'PAUSED'].includes(mapping.status)) {
+      return res.status(400).json({ error: `Assessment cannot be taken. Current status: ${mapping.status}` });
+    }
+
+    // If not in progress, start it first
+    if (mapping.status !== 'IN_PROGRESS') {
+      try {
+        await AssessmentUserMapping.startAssessment(mapping_id, {
+          ip_address: req.ip || req.connection.remoteAddress,
+          browser_info: req.headers['user-agent']
+        });
+        // Re-fetch mapping to get updated status
+        const updatedMapping = await AssessmentUserMapping.findById(mapping_id);
+        Object.assign(mapping, updatedMapping);
+      } catch (error) {
+        console.error('Error starting assessment:', error);
+        return res.status(400).json({ error: error.message || 'Failed to start assessment' });
+      }
+    }
+
+    // Get administrator with all configs
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    if (!admin) {
+      return res.status(404).json({ error: 'Administrator not found' });
+    }
+
+    // Get question config to check if random fetch is enabled
+    const [questionConfigRows] = await pool.execute(
+      'SELECT * FROM question_configs WHERE assessment_administrator_id = ?',
+      [mapping.assessment_administrator_id]
+    );
+    const config = questionConfigRows[0] || {};
+
+    // Get segments
+    const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+    
+    if (!segments || segments.length === 0) {
+      return res.status(400).json({ error: 'No segments found for this assessment' });
+    }
+    
+    // Get current segment progress
+    let currentSegmentIndex = mapping.current_segment_index || 0;
+    let currentSegment = segments[currentSegmentIndex];
+    
+    // If segment index is out of bounds, default to first segment
+    if (!currentSegment) {
+      currentSegment = segments[0];
+      currentSegmentIndex = 0;
+      // Update mapping to point to first segment
+      await pool.execute(
+        'UPDATE assessment_user_mappings SET current_segment_index = 0 WHERE id = ?',
+        [mapping_id]
+      );
+    }
+    
+    if (!currentSegment) {
+      // If segment index is out of bounds, default to first segment
+      const firstSegment = segments[0];
+      if (firstSegment) {
+        // Update mapping to point to first segment
+        await pool.execute(
+          'UPDATE assessment_user_mappings SET current_segment_index = 0 WHERE id = ?',
+          [mapping_id]
+        );
+        // Use first segment
+        const segmentToUse = firstSegment;
+        const segmentIndexToUse = 0;
+        
+        // Continue with first segment logic below
+        // (We'll set currentSegment and currentSegmentIndex)
+        currentSegment = segmentToUse;
+        currentSegmentIndex = segmentIndexToUse;
+      } else {
+        return res.status(404).json({ error: 'No segments available' });
+      }
+    }
+
+    // Get questions assigned to this user for current segment
+    let [questionAssignments] = await pool.execute(
+      `SELECT uqa.*
+       FROM user_question_assignments uqa
+       WHERE uqa.assessment_user_mapping_id = ? AND uqa.assessment_segment_id = ?
+       ORDER BY uqa.sequence_order ASC`,
+      [mapping_id, currentSegment.id]
+    );
+
+    // If no questions assigned, try to assign them (should have been done on start, but handle edge case)
+    if (!questionAssignments || questionAssignments.length === 0) {
+      try {
+        // Check if questions exist for this specific segment
+        const [segmentAssignments] = await pool.execute(
+          'SELECT COUNT(*) as count FROM user_question_assignments WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
+          [mapping_id, currentSegment.id]
+        );
+        
+        // Check if questions exist for other segments
+        const [allAssignments] = await pool.execute(
+          'SELECT COUNT(*) as count FROM user_question_assignments WHERE assessment_user_mapping_id = ?',
+          [mapping_id]
+        );
+        
+        // If no questions assigned for this segment, try to assign
+        // This handles cases where assignment failed partially or questions weren't assigned for this segment
+        if (segmentAssignments[0].count === 0) {
+          console.log(`No questions found for segment ${currentSegment.id} (${currentSegment.name}), attempting to assign...`);
+          
+          // First check if segment has questions configured
+          const [segmentProgQuestions] = await pool.execute(
+            'SELECT COUNT(*) as count FROM segment_programming_questions WHERE assessment_segment_id = ?',
+            [currentSegment.id]
+          );
+          const [segmentMCQQuestions] = await pool.execute(
+            'SELECT COUNT(*) as count FROM segment_mcq_questions WHERE assessment_segment_id = ?',
+            [currentSegment.id]
+          );
+          
+          const totalSegmentQuestions = (segmentProgQuestions[0]?.count || 0) + (segmentMCQQuestions[0]?.count || 0);
+          
+          console.log(`Segment ${currentSegment.id} (${currentSegment.name}): Found ${segmentProgQuestions[0]?.count || 0} programming and ${segmentMCQQuestions[0]?.count || 0} MCQ questions in database`);
+          
+          if (totalSegmentQuestions === 0 && !config.fetch_random_question) {
+            console.error(`Segment ${currentSegment.id} (${currentSegment.name}) has no questions configured and random fetch is disabled`);
+            return res.status(400).json({ 
+              error: `Segment "${currentSegment.name}" has no questions configured. Please add questions to this segment.` 
+            });
+          }
+          
+          // If questions exist but weren't assigned, try to assign them
+          if (totalSegmentQuestions > 0) {
+            console.log(`Segment ${currentSegment.id} has ${totalSegmentQuestions} questions, attempting assignment...`);
+          }
+          
+          await AssessmentUserMapping.assignQuestionsToUser(mapping_id);
+        }
+        
+        // Re-fetch assignments after potential assignment
+        const [retryAssignments] = await pool.execute(
+          `SELECT uqa.*
+           FROM user_question_assignments uqa
+           WHERE uqa.assessment_user_mapping_id = ? AND uqa.assessment_segment_id = ?
+           ORDER BY uqa.sequence_order ASC`,
+          [mapping_id, currentSegment.id]
+        );
+        
+        if (retryAssignments && retryAssignments.length > 0) {
+          // Replace the array with new assignments
+          questionAssignments = retryAssignments;
+        } else {
+          console.error(`No questions available for segment ${currentSegment.id} after assignment attempt`);
+          return res.status(400).json({ 
+            error: `No questions available for segment "${currentSegment.name}". Please contact administrator.` 
+          });
+        }
+      } catch (error) {
+        console.error('Error assigning questions:', error);
+        // If it's a duplicate entry error, just continue - questions might already be assigned
+        if (error.code === 'ER_DUP_ENTRY') {
+          console.log('Duplicate entry error, re-fetching assignments...');
+          // Re-fetch assignments one more time
+          const [retryAssignments] = await pool.execute(
+            `SELECT uqa.*
+             FROM user_question_assignments uqa
+             WHERE uqa.assessment_user_mapping_id = ? AND uqa.assessment_segment_id = ?
+             ORDER BY uqa.sequence_order ASC`,
+            [mapping_id, currentSegment.id]
+          );
+          if (retryAssignments && retryAssignments.length > 0) {
+            questionAssignments = retryAssignments;
+          } else {
+            console.error(`No questions found after duplicate entry error for segment ${currentSegment.id}`);
+            return res.status(400).json({ 
+              error: `No questions available for segment "${currentSegment.name}". Please contact administrator.` 
+            });
+          }
+        } else {
+          console.error('Failed to assign questions:', error.message);
+          return res.status(400).json({ 
+            error: `Failed to assign questions: ${error.message || 'Please contact administrator.'}` 
+          });
+        }
+      }
+    }
+
+    // Get full question details for each assigned question
+    const questions = [];
+    for (const assignment of questionAssignments) {
+      if (assignment.question_type === 'PROGRAMMING') {
+        const [pqRows] = await pool.execute(
+          `SELECT pq.*, 
+                  COALESCE(spq.positive_marks, pq.points) as positive_marks,
+                  COALESCE(spq.negative_marks, 0) as negative_marks,
+                  COALESCE(spq.neutral_marks, 0) as neutral_marks
+           FROM programming_questions pq
+           LEFT JOIN segment_programming_questions spq ON spq.programming_question_id = pq.id AND spq.assessment_segment_id = ?
+           WHERE pq.id = ?`,
+          [currentSegment.id, assignment.question_id]
+        );
+        if (pqRows[0]) {
+          questions.push({
+            ...pqRows[0],
+            question_type: 'PROGRAMMING',
+            programming_question_id: pqRows[0].id,
+            sequence_order: assignment.sequence_order,
+            weightage: assignment.weightage,
+            positive_marks: pqRows[0].positive_marks || pqRows[0].points || 0,
+            negative_marks: pqRows[0].negative_marks || 0,
+            neutral_marks: pqRows[0].neutral_marks || 0
+          });
+        }
+      } else if (assignment.question_type === 'MCQ') {
+        const [mqRows] = await pool.execute(
+          `SELECT mq.*,
+                  COALESCE(smq.positive_marks, mq.points) as positive_marks,
+                  COALESCE(smq.negative_marks, 0) as negative_marks,
+                  COALESCE(smq.neutral_marks, 0) as neutral_marks
+           FROM mcq_multiselect_questions mq
+           LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id AND smq.assessment_segment_id = ?
+           WHERE mq.id = ?`,
+          [currentSegment.id, assignment.question_id]
+        );
+        if (mqRows[0]) {
+          questions.push({
+            ...mqRows[0],
+            question_type: 'MCQ',
+            mcq_question_id: mqRows[0].id,
+            sequence_order: assignment.sequence_order,
+            weightage: assignment.weightage,
+            positive_marks: mqRows[0].positive_marks || mqRows[0].points || 0,
+            negative_marks: mqRows[0].negative_marks || 0,
+            neutral_marks: mqRows[0].neutral_marks || 0
+          });
+        }
+      }
+    }
+
+    // Get saved answers
+    const savedAnswers = questionAssignments; // Use the same query result
+
+    // Calculate time remaining
+    const startTime = new Date(mapping.assessment_started_time);
+    const now = new Date();
+    const elapsedSeconds = Math.floor((now - startTime) / 1000);
+    const totalDuration = admin.timing_config?.total_time || 0;
+    const timeRemaining = Math.max(0, totalDuration - elapsedSeconds);
+
+    // Calculate segment time remaining if segment-wise timing
+    let segmentTimeRemaining = 0;
+    if (admin.timing_config?.timing_mode === 'SEGMENT_WISE' && currentSegment.segment_duration) {
+      // Get segment start time from progress
+      const [progressRows] = await pool.execute(
+        'SELECT * FROM assessment_segment_progress WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
+        [mapping_id, currentSegment.id]
+      );
+      if (progressRows[0]?.started_at) {
+        const segmentStartTime = new Date(progressRows[0].started_at);
+        const segmentElapsed = Math.floor((now - segmentStartTime) / 1000);
+        segmentTimeRemaining = Math.max(0, currentSegment.segment_duration - segmentElapsed);
+      } else {
+        segmentTimeRemaining = currentSegment.segment_duration;
+      }
+    }
+
+    // Get saved answers - check if there's a submissions table or if answers are stored elsewhere
+    // For now, return empty saved answers as they will be saved via save-answer endpoint
+    const answersMap = {};
+
+    res.json({
+      questions: questions.map(q => ({
+        ...q,
+        question_type: q.question_type || (q.programming_question_id ? 'PROGRAMMING' : 'MCQ')
+      })),
+      time_remaining: timeRemaining,
+      segment_time_remaining: segmentTimeRemaining,
+      current_segment: {
+        id: currentSegment.id,
+        name: currentSegment.name,
+        segment_duration: currentSegment.segment_duration,
+        time_remaining: segmentTimeRemaining
+      },
+      current_segment_index: currentSegmentIndex,
+      current_question_index: mapping.current_question_index || 0,
+      saved_answers: answersMap,
+      proctoring: {
+        full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
+        webcam_required: admin.proctoring_config?.webcam_required || false,
+        max_tab_switch_allowed: admin.proctoring_config?.max_tab_switch_allowed ?? -1
+      },
+      segments: segments.map(s => ({
+        id: s.id,
+        name: s.name,
+        segment_duration: s.segment_duration
+      })),
+      total_duration: totalDuration
+    });
+  } catch (error) {
+    console.error('Error fetching assessment take data:', error);
+    res.status(500).json({ error: 'Failed to fetch assessment data' });
   }
 };
 
@@ -890,8 +1397,10 @@ module.exports = {
   // Segment Questions
   addProgrammingQuestion,
   removeProgrammingQuestion,
+  updateProgrammingQuestion,
   addMCQQuestion,
   removeMCQQuestion,
+  updateMCQQuestion,
   
   // Administrator
   createAdministrator,
@@ -905,7 +1414,9 @@ module.exports = {
   inviteUsers,
   getUserMappings,
   getMyAssessments,
+  getStartInfo,
   startAssessment,
+  getAssessmentTake,
   getAssessmentQuestions,
   submitAssessment,
   updateProgress,

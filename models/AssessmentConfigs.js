@@ -359,12 +359,18 @@ class SegmentProgrammingQuestion {
       `SELECT id from programming_questions where question_id = ${data.question_id}`
     )
     console.log( programming_question_id, data);
+    
+    // Convert undefined to null for SQL compatibility
+    const safeSequenceOrder = data.sequence_order !== undefined ? data.sequence_order : maxOrder[0].next_order
+    const safeWeightageOverride = data.weightage_override !== undefined ? data.weightage_override : null
+    const safeIsMandatory = data.is_mandatory !== undefined ? data.is_mandatory : true
+    
     const [result] = await pool.execute(
       `INSERT INTO segment_programming_questions 
        (assessment_segment_id, programming_question_id, sequence_order, weightage_override, is_mandatory)
        VALUES (?, ?, ?, ?, ?)`,
       [data.assessment_segment_id, programming_question_id[0].id, 
-       data.sequence_order || maxOrder[0].next_order, data.weightage_override, data.is_mandatory ?? true]
+       safeSequenceOrder, safeWeightageOverride, safeIsMandatory]
     );
 
     // Update segment total marks
@@ -406,6 +412,53 @@ class SegmentProgrammingQuestion {
     );
     return true;
   }
+
+  static async update(assessment_segment_id, programming_question_id, data) {
+    const updates = [];
+    const params = [];
+
+    if (data.weightage_override !== undefined) {
+      updates.push('weightage_override = ?');
+      params.push(data.weightage_override !== null ? data.weightage_override : null);
+    }
+    if (data.positive_marks !== undefined) {
+      updates.push('positive_marks = ?');
+      params.push(data.positive_marks !== null && data.positive_marks !== '' ? parseFloat(data.positive_marks) : null);
+    }
+    if (data.negative_marks !== undefined) {
+      updates.push('negative_marks = ?');
+      params.push(data.negative_marks !== null && data.negative_marks !== '' ? parseFloat(data.negative_marks) : null);
+    }
+    if (data.neutral_marks !== undefined) {
+      updates.push('neutral_marks = ?');
+      params.push(data.neutral_marks !== null && data.neutral_marks !== '' ? parseFloat(data.neutral_marks) : null);
+    }
+    if (data.is_mandatory !== undefined) {
+      updates.push('is_mandatory = ?');
+      params.push(data.is_mandatory);
+    }
+
+    if (updates.length === 0) {
+      return true; // No updates to make
+    }
+
+    params.push(assessment_segment_id, programming_question_id);
+
+    await pool.execute(
+      `UPDATE segment_programming_questions 
+       SET ${updates.join(', ')} 
+       WHERE assessment_segment_id = ? AND programming_question_id = ?`,
+      params
+    );
+
+    // Update segment total marks if weightage changed
+    if (data.weightage_override !== undefined) {
+      const AssessmentSegment = require('./AssessmentSegment');
+      await AssessmentSegment.updateTotalMarks(assessment_segment_id);
+    }
+
+    return true;
+  }
 }
 
 /**
@@ -441,12 +494,17 @@ class SegmentMCQQuestion {
       `SELECT id from mcq_multiselect_questions where question_id = ${data.question_id}`
     )
     console.log( mcq_question_id, data);
+    
+    // Convert undefined to null for SQL compatibility
+    const safeSequenceOrder = data.sequence_order !== undefined ? data.sequence_order : maxOrder[0].next_order
+    const safeWeightageOverride = data.weightage_override !== undefined ? data.weightage_override : null
+    const safeIsMandatory = data.is_mandatory !== undefined ? data.is_mandatory : true
     const [result] = await pool.execute(
       `INSERT INTO segment_mcq_questions 
        (assessment_segment_id, mcq_question_id, sequence_order, weightage_override, is_mandatory)
        VALUES (?, ?, ?, ?, ?)`,
       [data.assessment_segment_id, mcq_question_id[0].id, 
-       data.sequence_order || maxOrder[0].next_order, data.weightage_override, data.is_mandatory ?? true]
+       safeSequenceOrder, safeWeightageOverride, safeIsMandatory]
     );
 
     // Update segment total marks
@@ -486,6 +544,53 @@ class SegmentMCQQuestion {
       'UPDATE segment_mcq_questions SET sequence_order = ? WHERE id = ?',
       [sequence_order, id]
     );
+    return true;
+  }
+
+  static async update(assessment_segment_id, mcq_question_id, data) {
+    const updates = [];
+    const params = [];
+
+    if (data.weightage_override !== undefined) {
+      updates.push('weightage_override = ?');
+      params.push(data.weightage_override !== null ? data.weightage_override : null);
+    }
+    if (data.positive_marks !== undefined) {
+      updates.push('positive_marks = ?');
+      params.push(data.positive_marks !== null && data.positive_marks !== '' ? parseFloat(data.positive_marks) : null);
+    }
+    if (data.negative_marks !== undefined) {
+      updates.push('negative_marks = ?');
+      params.push(data.negative_marks !== null && data.negative_marks !== '' ? parseFloat(data.negative_marks) : null);
+    }
+    if (data.neutral_marks !== undefined) {
+      updates.push('neutral_marks = ?');
+      params.push(data.neutral_marks !== null && data.neutral_marks !== '' ? parseFloat(data.neutral_marks) : null);
+    }
+    if (data.is_mandatory !== undefined) {
+      updates.push('is_mandatory = ?');
+      params.push(data.is_mandatory);
+    }
+
+    if (updates.length === 0) {
+      return true; // No updates to make
+    }
+
+    params.push(assessment_segment_id, mcq_question_id);
+
+    await pool.execute(
+      `UPDATE segment_mcq_questions 
+       SET ${updates.join(', ')} 
+       WHERE assessment_segment_id = ? AND mcq_question_id = ?`,
+      params
+    );
+
+    // Update segment total marks if weightage changed
+    if (data.weightage_override !== undefined) {
+      const AssessmentSegment = require('./AssessmentSegment');
+      await AssessmentSegment.updateTotalMarks(assessment_segment_id);
+    }
+
     return true;
   }
 }
