@@ -281,9 +281,9 @@ class AssessmentSegment {
               q.level_id,
               l.name as level_name,
               q.points as default_weightage,
-              spq.positive_marks,
-              spq.negative_marks,
-              spq.neutral_marks
+              COALESCE(spq.positive_marks, q.points) as positive_marks,
+              COALESCE(spq.negative_marks, 0) as negative_marks,
+              COALESCE(spq.neutral_marks, 0) as neutral_marks
        FROM segment_programming_questions spq
        JOIN programming_questions pq ON spq.programming_question_id = pq.id
        JOIN questions q on pq.question_id = q.id
@@ -303,9 +303,9 @@ class AssessmentSegment {
               q.level_id,
               l.name as level_name,
               q.points as default_weightage,
-              smq.positive_marks,
-              smq.negative_marks,
-              smq.neutral_marks
+              COALESCE(smq.positive_marks, q.points) as positive_marks,
+              COALESCE(smq.negative_marks, 0) as negative_marks,
+              COALESCE(smq.neutral_marks, 0) as neutral_marks
        FROM segment_mcq_questions smq
        JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
        JOIN questions q ON mq.question_id = q.id

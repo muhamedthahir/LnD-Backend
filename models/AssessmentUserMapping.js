@@ -379,9 +379,10 @@ class AssessmentUserMapping {
         // Get static questions from segment
         try {
           const [pq] = await pool.execute(
-            `SELECT spq.*, pq.points as default_weightage, pq.id as programming_question_id
+            `SELECT spq.*, q.points as default_weightage, pq.id as programming_question_id
              FROM segment_programming_questions spq
              JOIN programming_questions pq ON spq.programming_question_id = pq.id
+             JOIN questions q ON pq.question_id = q.id
              WHERE spq.assessment_segment_id = ?
              ORDER BY spq.sequence_order`,
             [segment.id]
@@ -400,9 +401,10 @@ class AssessmentUserMapping {
 
         try {
           const [mq] = await pool.execute(
-            `SELECT smq.*, mq.points as default_weightage, mq.id as mcq_question_id
+            `SELECT smq.*, q.points as default_weightage, mq.id as mcq_question_id
              FROM segment_mcq_questions smq
              JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
+             JOIN questions q ON mq.question_id = q.id
              WHERE smq.assessment_segment_id = ?
              ORDER BY smq.sequence_order`,
             [segment.id]

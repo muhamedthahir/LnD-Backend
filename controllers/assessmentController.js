@@ -1018,11 +1018,12 @@ const getAssessmentTake = async (req, res) => {
     for (const assignment of questionAssignments) {
       if (assignment.question_type === 'PROGRAMMING') {
         const [pqRows] = await pool.execute(
-          `SELECT pq.*, 
-                  COALESCE(spq.positive_marks, pq.points) as positive_marks,
+          `SELECT pq.*, q.name, q.description, q.points,
+                  COALESCE(spq.positive_marks, q.points) as positive_marks,
                   COALESCE(spq.negative_marks, 0) as negative_marks,
                   COALESCE(spq.neutral_marks, 0) as neutral_marks
            FROM programming_questions pq
+           JOIN questions q ON pq.question_id = q.id
            LEFT JOIN segment_programming_questions spq ON spq.programming_question_id = pq.id AND spq.assessment_segment_id = ?
            WHERE pq.id = ?`,
           [currentSegment.id, assignment.question_id]
@@ -1032,6 +1033,7 @@ const getAssessmentTake = async (req, res) => {
             ...pqRows[0],
             question_type: 'PROGRAMMING',
             programming_question_id: pqRows[0].id,
+            problem_statement: pqRows[0].name || pqRows[0].description,
             sequence_order: assignment.sequence_order,
             weightage: assignment.weightage,
             positive_marks: pqRows[0].positive_marks || pqRows[0].points || 0,
@@ -1041,25 +1043,38 @@ const getAssessmentTake = async (req, res) => {
         }
       } else if (assignment.question_type === 'MCQ') {
         const [mqRows] = await pool.execute(
-          `SELECT mq.*,
-                  COALESCE(smq.positive_marks, mq.points) as positive_marks,
+          `SELECT mq.*, q.name, q.description, q.points,
+                  COALESCE(smq.positive_marks, q.points) as positive_marks,
                   COALESCE(smq.negative_marks, 0) as negative_marks,
                   COALESCE(smq.neutral_marks, 0) as neutral_marks
            FROM mcq_multiselect_questions mq
+           JOIN questions q ON mq.question_id = q.id
            LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id AND smq.assessment_segment_id = ?
            WHERE mq.id = ?`,
           [currentSegment.id, assignment.question_id]
         );
         if (mqRows[0]) {
+          // Fetch options for this MCQ
+          const [optionRows] = await pool.execute(
+            `SELECT id, text as option_text, \`order\` FROM options WHERE mcq_multiselect_question_id = ? ORDER BY \`order\` ASC`,
+            [mqRows[0].id]
+          );
+          
           questions.push({
             ...mqRows[0],
             question_type: 'MCQ',
             mcq_question_id: mqRows[0].id,
+            question_text: mqRows[0].name || mqRows[0].description,
             sequence_order: assignment.sequence_order,
             weightage: assignment.weightage,
             positive_marks: mqRows[0].positive_marks || mqRows[0].points || 0,
             negative_marks: mqRows[0].negative_marks || 0,
-            neutral_marks: mqRows[0].neutral_marks || 0
+            neutral_marks: mqRows[0].neutral_marks || 0,
+            options: optionRows.map(opt => ({
+              id: opt.id,
+              value: opt.id,
+              text: opt.option_text
+            }))
           });
         }
       }
