@@ -20,6 +20,16 @@ class MCQSubmission {
       }
     }
 
+    // Make submission_id nullable for assessment-based submissions
+    try {
+      await pool.execute(`ALTER TABLE mcq_submissions MODIFY COLUMN submission_id INT DEFAULT NULL`);
+    } catch (e) { /* May fail if constraint exists */ }
+
+    // Drop foreign key constraint if it exists (for assessment submissions that don't need it)
+    try {
+      await pool.execute(`ALTER TABLE mcq_submissions DROP FOREIGN KEY mcq_submissions_ibfk_1`);
+    } catch (e) { /* Constraint may not exist or already dropped */ }
+
     // Add indexes if they don't exist
     try {
       await pool.execute(`ALTER TABLE mcq_submissions ADD INDEX idx_assessment_mapping (assessment_user_mapping_id)`);
