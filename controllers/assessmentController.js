@@ -1107,37 +1107,62 @@ const getAssessmentTake = async (req, res) => {
       }
     }
 
-    // Get saved answers - check if there's a submissions table or if answers are stored elsewhere
-    // For now, return empty saved answers as they will be saved via save-answer endpoint
-    const answersMap = {};
+    // Get saved answers from database
+    let answersMap = {};
+    try {
+      answersMap = await UserQuestionAssignment.getSavedAnswers(mapping_id);
+    } catch (e) {
+      console.log('No saved answers found or table not exists');
+    }
+
+    // Check if this is a resume (if saved time_remaining exists and is less than calculated)
+    const isResume = mapping.time_remaining > 0 && mapping.time_remaining < timeRemaining;
+    const actualTimeRemaining = isResume ? mapping.time_remaining : timeRemaining;
+    
+    // For segment time, use saved if resuming in same segment
+    const actualSegmentTimeRemaining = (isResume && mapping.segment_time_remaining > 0) 
+      ? mapping.segment_time_remaining 
+      : segmentTimeRemaining;
+
+    // If resuming, increment resume count
+    if (isResume) {
+      await AssessmentUserMapping.resume(mapping_id);
+    }
 
     res.json({
       questions: questions.map(q => ({
         ...q,
         question_type: q.question_type || (q.programming_question_id ? 'PROGRAMMING' : 'MCQ')
       })),
-      time_remaining: timeRemaining,
-      segment_time_remaining: segmentTimeRemaining,
+      time_remaining: actualTimeRemaining,
+      segment_time_remaining: actualSegmentTimeRemaining,
+      total_time_worked: mapping.total_time_worked || 0,
+      resume_count: (mapping.resume_count || 0) + (isResume ? 1 : 0),
       current_segment: {
         id: currentSegment.id,
         name: currentSegment.name,
         segment_duration: currentSegment.segment_duration,
-        time_remaining: segmentTimeRemaining
+        time_remaining: actualSegmentTimeRemaining
       },
       current_segment_index: currentSegmentIndex,
       current_question_index: mapping.current_question_index || 0,
       saved_answers: answersMap,
       proctoring: {
+        proctoring_enabled: admin.proctoring_config?.proctoring_enabled || false,
         full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
         webcam_required: admin.proctoring_config?.webcam_required || false,
-        max_tab_switch_allowed: admin.proctoring_config?.max_tab_switch_allowed ?? -1
+        max_tab_switch_allowed: admin.proctoring_config?.max_tab_switch_allowed ?? -1,
+        disable_copy_paste: admin.proctoring_config?.disable_copy_paste || false,
+        disable_right_click: admin.proctoring_config?.disable_right_click || false
       },
       segments: segments.map(s => ({
         id: s.id,
         name: s.name,
         segment_duration: s.segment_duration
       })),
-      total_duration: totalDuration
+      total_duration: totalDuration,
+      timing_mode: admin.timing_config?.timing_mode || 'OVERALL',
+      tab_switch_count: mapping.tab_switch_count || 0
     });
   } catch (error) {
     console.error('Error fetching assessment take data:', error);
@@ -1230,17 +1255,20 @@ const updateProgress = async (req, res) => {
 const logProctoringEvent = async (req, res) => {
   try {
     const { mapping_id } = req.params;
-    const { event_type, metadata, segment_id } = req.body;
+    const { event_type, metadata, details, segment_id } = req.body;
+
+    // Support both 'metadata' and 'details' field names
+    const eventMetadata = metadata || details || {};
 
     await ProctoringLog.log({
       assessment_user_mapping_id: mapping_id,
       event_type,
-      metadata,
+      metadata: eventMetadata,
       segment_id
     });
 
-    // Handle tab switch
-    if (event_type === 'TAB_SWITCH') {
+    // Handle tab switch events
+    if (event_type === 'TAB_SWITCH' || event_type === 'WINDOW_BLUR') {
       const result = await AssessmentUserMapping.incrementTabSwitch(mapping_id);
       return res.json(result);
     }
@@ -1304,6 +1332,307 @@ const getAssessmentResult = async (req, res) => {
     console.error('Error fetching assessment result:', error);
     res.status(500).json({ error: 'Failed to fetch result' });
   }
+};
+
+/**
+ * Save answer (auto-save individual answer)
+ */
+const saveAnswer = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+    const { question_id, question_type, answer } = req.body;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: 'Assessment is not in progress' });
+    }
+
+    // Save or update the answer in user_question_submissions
+    await UserQuestionAssignment.saveAnswer({
+      assessment_user_mapping_id: mapping_id,
+      question_id,
+      question_type,
+      answer
+    });
+
+    // Update segment progress
+    await AssessmentSegmentProgress.updateQuestionProgress(
+      mapping_id,
+      mapping.current_segment_index,
+      question_id,
+      question_type
+    );
+
+    // Update mapping last activity
+    await AssessmentUserMapping.updateActivity(mapping_id, {});
+
+    res.json({ message: 'Answer saved' });
+  } catch (error) {
+    console.error('Error saving answer:', error);
+    res.status(500).json({ error: 'Failed to save answer' });
+  }
+};
+
+/**
+ * Save progress (periodic auto-save of timer and position)
+ */
+const saveProgress = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+    const { 
+      current_segment_index, 
+      current_question_index, 
+      time_remaining, 
+      segment_time_remaining,
+      total_time_worked 
+    } = req.body;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: 'Assessment is not in progress' });
+    }
+
+    // Update mapping with progress data
+    await AssessmentUserMapping.saveProgress(mapping_id, {
+      current_segment_index,
+      current_question_index,
+      time_remaining,
+      segment_time_remaining,
+      total_time_worked
+    });
+
+    res.json({ message: 'Progress saved' });
+  } catch (error) {
+    console.error('Error saving progress:', error);
+    res.status(500).json({ error: 'Failed to save progress' });
+  }
+};
+
+/**
+ * Submit code (programming question submission)
+ */
+const submitCode = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+    const { question_id, code, language } = req.body;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: 'Assessment is not in progress' });
+    }
+
+    // Save the code submission
+    const result = await UserQuestionAssignment.submitCode({
+      assessment_user_mapping_id: mapping_id,
+      question_id,
+      code,
+      language
+    });
+
+    // Also save as answer for consistency
+    await UserQuestionAssignment.saveAnswer({
+      assessment_user_mapping_id: mapping_id,
+      question_id,
+      question_type: 'PROGRAMMING',
+      answer: { code, language }
+    });
+
+    // Update segment progress
+    await AssessmentSegmentProgress.updateQuestionProgress(
+      mapping_id,
+      mapping.current_segment_index,
+      question_id,
+      'PROGRAMMING'
+    );
+
+    // Update mapping last activity
+    await AssessmentUserMapping.updateActivity(mapping_id, {});
+
+    res.json({ 
+      message: 'Code submitted successfully',
+      submission_id: result?.id
+    });
+  } catch (error) {
+    console.error('Error submitting code:', error);
+    res.status(500).json({ error: 'Failed to submit code' });
+  }
+};
+
+/**
+ * Move to next segment
+ */
+const nextSegment = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: 'Assessment is not in progress' });
+    }
+
+    // Get admin and segments
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    const segments = await AssessmentSegment.findByAssessmentId(admin.assessment_id);
+    
+    const nextIndex = mapping.current_segment_index + 1;
+    if (nextIndex >= segments.length) {
+      return res.status(400).json({ error: 'No more segments' });
+    }
+
+    // Update current segment index
+    await AssessmentUserMapping.updateSegmentIndex(mapping_id, nextIndex);
+
+    // Get questions for next segment
+    const nextSegment = segments[nextIndex];
+    const questions = await getSegmentQuestions(nextSegment.id, mapping_id);
+
+    // Mark current segment as completed in progress
+    await AssessmentSegmentProgress.markSegmentCompleted(mapping_id, mapping.current_segment_index);
+
+    res.json({
+      segment_index: nextIndex,
+      segment: nextSegment,
+      questions,
+      segment_duration: nextSegment.segment_duration,
+      saved_answers: {}
+    });
+  } catch (error) {
+    console.error('Error moving to next segment:', error);
+    res.status(500).json({ error: 'Failed to move to next segment' });
+  }
+};
+
+/**
+ * Switch to a different segment
+ */
+const switchSegment = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+    const { segment_index } = req.body;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: 'Assessment is not in progress' });
+    }
+
+    // Get admin and check if segment switch is allowed
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    const segments = await AssessmentSegment.findByAssessmentId(admin.assessment_id);
+    
+    if (segment_index < 0 || segment_index >= segments.length) {
+      return res.status(400).json({ error: 'Invalid segment index' });
+    }
+
+    // Check timing config for segment navigation restrictions
+    const timingConfig = await TimingConfig.findByAdminId(mapping.assessment_administrator_id);
+    
+    // Update current segment index
+    await AssessmentUserMapping.updateSegmentIndex(mapping_id, segment_index);
+
+    // Get questions for the segment
+    const targetSegment = segments[segment_index];
+    const questions = await getSegmentQuestions(targetSegment.id, mapping_id);
+
+    res.json({
+      segment_index,
+      segment: targetSegment,
+      questions,
+      segment_duration: targetSegment.segment_duration,
+      saved_answers: {}
+    });
+  } catch (error) {
+    console.error('Error switching segment:', error);
+    res.status(500).json({ error: 'Failed to switch segment' });
+  }
+};
+
+// Helper function to get segment questions
+const getSegmentQuestions = async (segmentId, mappingId) => {
+  // Get programming questions
+  const [progQuestions] = await pool.execute(
+    `SELECT pq.*, aspq.marks, aspq.order_index
+     FROM assessment_segment_programming_questions aspq
+     JOIN programming_questions pq ON aspq.programming_question_id = pq.id
+     WHERE aspq.assessment_segment_id = ?
+     ORDER BY aspq.order_index`,
+    [segmentId]
+  );
+
+  // Get MCQ questions
+  const [mcqQuestions] = await pool.execute(
+    `SELECT mq.*, asmq.marks, asmq.order_index
+     FROM assessment_segment_mcq_questions asmq
+     JOIN mcq_questions mq ON asmq.mcq_question_id = mq.id
+     WHERE asmq.assessment_segment_id = ?
+     ORDER BY asmq.order_index`,
+    [segmentId]
+  );
+
+  // Get MCQ options
+  for (const q of mcqQuestions) {
+    const [options] = await pool.execute(
+      'SELECT * FROM mcq_options WHERE mcq_question_id = ? ORDER BY order_index',
+      [q.id]
+    );
+    q.options = options;
+  }
+
+  // Get test cases for programming questions (non-hidden only for display)
+  for (const q of progQuestions) {
+    const [testCases] = await pool.execute(
+      'SELECT id, input, expected_output, description, is_hidden FROM test_cases WHERE programming_question_id = ?',
+      [q.id]
+    );
+    q.test_cases = testCases;
+  }
+
+  // Combine and sort questions
+  const allQuestions = [
+    ...progQuestions.map(q => ({ ...q, type: 'PROGRAMMING', question_type: 'PROGRAMMING' })),
+    ...mcqQuestions.map(q => ({ ...q, type: 'MCQ', question_type: 'MCQ' }))
+  ].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+  return allQuestions;
 };
 
 // =====================================================
@@ -1438,6 +1767,11 @@ module.exports = {
   logProctoringEvent,
   submitFeedback,
   getAssessmentResult,
+  saveAnswer,
+  saveProgress,
+  submitCode,
+  nextSegment,
+  switchSegment,
   
   // Random Fetch Criteria
   addRandomFetchCriteria,
