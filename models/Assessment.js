@@ -194,18 +194,51 @@ class Assessment {
     } = assessmentData;
 
     try {
+      // Build dynamic update query - only update fields that are provided
+      const updates = [];
+      const params = [];
+
+      if (title !== undefined) {
+        updates.push('title = ?');
+        params.push(title);
+      }
+      if (description !== undefined) {
+        updates.push('description = ?');
+        params.push(description);
+      }
+      if (institution_id !== undefined) {
+        updates.push('institution_id = ?');
+        params.push(institution_id || null);
+      }
+      if (topic_id !== undefined) {
+        updates.push('topic_id = ?');
+        params.push(topic_id || null);
+      }
+      if (status !== undefined) {
+        updates.push('status = ?');
+        params.push(status);
+      }
+      if (is_published !== undefined) {
+        updates.push('is_published = ?');
+        params.push(is_published);
+      }
+      if (total_duration !== undefined) {
+        updates.push('total_duration = ?');
+        params.push(total_duration);
+      }
+      if (last_updated_by !== undefined) {
+        updates.push('last_updated_by = ?');
+        params.push(last_updated_by);
+      }
+
+      if (updates.length === 0) {
+        return true; // Nothing to update
+      }
+
+      params.push(id);
       await pool.execute(
-        `UPDATE assessments SET
-           title = COALESCE(?, title),
-           description = COALESCE(?, description),
-           institution_id = ?,
-           topic_id = ?,
-           status = COALESCE(?, status),
-           is_published = COALESCE(?, is_published),
-           total_duration = COALESCE(?, total_duration),
-           last_updated_by = ?
-         WHERE id = ?`,
-        [title, description, institution_id, topic_id, status, is_published, total_duration, last_updated_by, id]
+        `UPDATE assessments SET ${updates.join(', ')} WHERE id = ?`,
+        params
       );
       return true;
     } catch (error) {

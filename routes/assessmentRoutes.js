@@ -71,14 +71,31 @@ router.get('/user/assessments/:mapping_id/take', authenticate, assessmentControl
 // Get Questions for a Segment
 router.get('/take/:mapping_id/segments/:segment_id/questions', authenticate, assessmentController.getAssessmentQuestions);
 
+// Save Answer (auto-save individual answer)
+router.post('/user/assessments/:mapping_id/save-answer', authenticate, assessmentController.saveAnswer);
+
+// Save Progress (periodic auto-save of timer and position)
+router.post('/user/assessments/:mapping_id/save-progress', authenticate, assessmentController.saveProgress);
+
+// Submit Code (programming question)
+router.post('/user/assessments/:mapping_id/submit-code', authenticate, assessmentController.submitCode);
+
 // Update Progress
 router.patch('/take/:mapping_id/progress', authenticate, assessmentController.updateProgress);
 
-// Log Proctoring Event
+// Log Proctoring Event (both routes for compatibility)
 router.post('/take/:mapping_id/proctoring', authenticate, assessmentController.logProctoringEvent);
+router.post('/user/assessments/:mapping_id/proctoring-log', authenticate, assessmentController.logProctoringEvent);
 
-// Submit Assessment
+// Submit Assessment (both routes for compatibility)
 router.post('/take/:mapping_id/submit', authenticate, assessmentController.submitAssessment);
+router.post('/user/assessments/:mapping_id/submit', authenticate, assessmentController.submitAssessment);
+
+// Next Segment
+router.post('/user/assessments/:mapping_id/next-segment', authenticate, assessmentController.nextSegment);
+
+// Switch Segment
+router.post('/user/assessments/:mapping_id/switch-segment', authenticate, assessmentController.switchSegment);
 
 // Submit Feedback
 router.post('/take/:mapping_id/feedback', authenticate, assessmentController.submitFeedback);

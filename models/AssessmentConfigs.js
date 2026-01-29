@@ -700,6 +700,75 @@ class AssessmentSegmentProgress {
     }
     return true;
   }
+
+  /**
+   * Mark a segment as completed
+   */
+  static async markSegmentCompleted(assessment_user_mapping_id, segment_index) {
+    // Get the segment ID for this index
+    const [mappingRows] = await pool.execute(
+      `SELECT aum.assessment_administrator_id, aa.assessment_id 
+       FROM assessment_user_mappings aum
+       JOIN assessment_administrators aa ON aum.assessment_administrator_id = aa.id
+       WHERE aum.id = ?`,
+      [assessment_user_mapping_id]
+    );
+
+    if (mappingRows.length === 0) return false;
+
+    const [segments] = await pool.execute(
+      'SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT ?, 1',
+      [mappingRows[0].assessment_id, segment_index]
+    );
+
+    if (segments.length === 0) return false;
+
+    await pool.execute(
+      `UPDATE assessment_segment_progress 
+       SET status = 'COMPLETED', completed_at = NOW()
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+      [assessment_user_mapping_id, segments[0].id]
+    );
+
+    return true;
+  }
+
+  /**
+   * Update question progress when an answer is submitted
+   */
+  static async updateQuestionProgress(assessment_user_mapping_id, segment_index, question_id, question_type) {
+    // Get the segment ID for this index
+    const [mappingRows] = await pool.execute(
+      `SELECT aum.assessment_administrator_id, aa.assessment_id 
+       FROM assessment_user_mappings aum
+       JOIN assessment_administrators aa ON aum.assessment_administrator_id = aa.id
+       WHERE aum.id = ?`,
+      [assessment_user_mapping_id]
+    );
+
+    if (mappingRows.length === 0) return false;
+
+    const [segments] = await pool.execute(
+      'SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT ?, 1',
+      [mappingRows[0].assessment_id, segment_index]
+    );
+
+    if (segments.length === 0) return false;
+
+    // Increment attempted_questions count
+    await pool.execute(
+      `UPDATE assessment_segment_progress 
+       SET attempted_questions = COALESCE(attempted_questions, 0) + 1
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?
+       AND NOT EXISTS (
+         SELECT 1 FROM user_question_submissions 
+         WHERE assessment_user_mapping_id = ? AND question_id = ? AND question_type = ?
+       )`,
+      [assessment_user_mapping_id, segments[0].id, assessment_user_mapping_id, question_id, question_type]
+    );
+
+    return true;
+  }
 }
 
 /**
@@ -759,6 +828,113 @@ class UserQuestionAssignment {
       [assessment_user_mapping_id]
     );
     return rows;
+  }
+
+  /**
+   * Save or update an answer
+   */
+  static async saveAnswer(data) {
+    const { assessment_user_mapping_id, question_id, question_type, answer } = data;
+    
+    // Ensure user_question_submissions table exists
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS user_question_submissions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        assessment_user_mapping_id INT NOT NULL,
+        question_id INT NOT NULL,
+        question_type ENUM('PROGRAMMING', 'MCQ') NOT NULL,
+        answer_data JSON DEFAULT NULL,
+        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_submission (assessment_user_mapping_id, question_id, question_type),
+        INDEX idx_mapping (assessment_user_mapping_id),
+        FOREIGN KEY (assessment_user_mapping_id) REFERENCES assessment_user_mappings(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Upsert the answer
+    await pool.execute(
+      `INSERT INTO user_question_submissions 
+       (assessment_user_mapping_id, question_id, question_type, answer_data)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE answer_data = VALUES(answer_data), updated_at = NOW()`,
+      [assessment_user_mapping_id, question_id, question_type, JSON.stringify(answer)]
+    );
+
+    return true;
+  }
+
+  /**
+   * Submit code for a programming question
+   */
+  static async submitCode(data) {
+    const { assessment_user_mapping_id, question_id, code, language } = data;
+
+    // Ensure code_submissions table exists
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS assessment_code_submissions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        assessment_user_mapping_id INT NOT NULL,
+        question_id INT NOT NULL,
+        code LONGTEXT NOT NULL,
+        language VARCHAR(50) NOT NULL,
+        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        execution_result JSON DEFAULT NULL,
+        test_cases_passed INT DEFAULT 0,
+        test_cases_total INT DEFAULT 0,
+        score DECIMAL(10,2) DEFAULT 0,
+        INDEX idx_mapping (assessment_user_mapping_id),
+        INDEX idx_question (question_id),
+        FOREIGN KEY (assessment_user_mapping_id) REFERENCES assessment_user_mappings(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Check if submission exists
+    const [existing] = await pool.execute(
+      'SELECT id FROM assessment_code_submissions WHERE assessment_user_mapping_id = ? AND question_id = ?',
+      [assessment_user_mapping_id, question_id]
+    );
+
+    if (existing.length > 0) {
+      // Update existing submission
+      await pool.execute(
+        `UPDATE assessment_code_submissions 
+         SET code = ?, language = ?, updated_at = NOW()
+         WHERE assessment_user_mapping_id = ? AND question_id = ?`,
+        [code, language, assessment_user_mapping_id, question_id]
+      );
+      return { id: existing[0].id, updated: true };
+    } else {
+      // Create new submission
+      const [result] = await pool.execute(
+        `INSERT INTO assessment_code_submissions 
+         (assessment_user_mapping_id, question_id, code, language)
+         VALUES (?, ?, ?, ?)`,
+        [assessment_user_mapping_id, question_id, code, language]
+      );
+      return { id: result.insertId, updated: false };
+    }
+  }
+
+  /**
+   * Get saved answers for a mapping
+   */
+  static async getSavedAnswers(assessment_user_mapping_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM user_question_submissions WHERE assessment_user_mapping_id = ?',
+      [assessment_user_mapping_id]
+    );
+    
+    const answers = {};
+    for (const row of rows) {
+      try {
+        answers[row.question_id] = row.answer_data ? JSON.parse(row.answer_data) : null;
+      } catch (e) {
+        answers[row.question_id] = row.answer_data;
+      }
+    }
+    return answers;
   }
 }
 
