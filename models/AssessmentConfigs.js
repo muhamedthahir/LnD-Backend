@@ -738,6 +738,9 @@ class AssessmentSegmentProgress {
    * Update question progress when an answer is submitted
    */
   static async updateQuestionProgress(assessment_user_mapping_id, segment_index, question_id, question_type) {
+    // Default segment_index to 0 if undefined/null
+    const safeSegmentIndex = parseInt(segment_index) || 0;
+    
     // Get the segment ID for this index
     const [mappingRows] = await pool.execute(
       `SELECT aum.assessment_administrator_id, aa.assessment_id 
@@ -749,9 +752,10 @@ class AssessmentSegmentProgress {
 
     if (mappingRows.length === 0) return false;
 
+    // Use OFFSET instead of LIMIT ?,1 for MySQL prepared statement compatibility
     const [segments] = await pool.execute(
-      'SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT ?, 1',
-      [mappingRows[0].assessment_id, segment_index]
+      `SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT 1 OFFSET ${safeSegmentIndex}`,
+      [mappingRows[0].assessment_id]
     );
 
     if (segments.length === 0) return false;
@@ -835,9 +839,9 @@ class UserQuestionAssignment {
    * Save or update an answer
    */
   static async saveAnswer(data) {
-    const { assessment_user_mapping_id, question_id, question_type, answer } = data;
+    const { assessment_user_mapping_id, question_id, question_type, answer, is_correct, score } = data;
     
-    // Ensure user_question_submissions table exists
+    // Ensure user_question_submissions table exists with is_correct and score columns
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS user_question_submissions (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -845,6 +849,8 @@ class UserQuestionAssignment {
         question_id INT NOT NULL,
         question_type ENUM('PROGRAMMING', 'MCQ') NOT NULL,
         answer_data JSON DEFAULT NULL,
+        is_correct BOOLEAN DEFAULT NULL,
+        score DECIMAL(10,2) DEFAULT NULL,
         submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY unique_submission (assessment_user_mapping_id, question_id, question_type),
@@ -853,13 +859,25 @@ class UserQuestionAssignment {
       )
     `);
 
-    // Upsert the answer
+    // Add is_correct and score columns if they don't exist (for existing tables)
+    try {
+      await pool.execute(`ALTER TABLE user_question_submissions ADD COLUMN is_correct BOOLEAN DEFAULT NULL`);
+    } catch (e) { /* Column may already exist */ }
+    try {
+      await pool.execute(`ALTER TABLE user_question_submissions ADD COLUMN score DECIMAL(10,2) DEFAULT NULL`);
+    } catch (e) { /* Column may already exist */ }
+
+    // Upsert the answer with score
     await pool.execute(
       `INSERT INTO user_question_submissions 
-       (assessment_user_mapping_id, question_id, question_type, answer_data)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE answer_data = VALUES(answer_data), updated_at = NOW()`,
-      [assessment_user_mapping_id, question_id, question_type, JSON.stringify(answer)]
+       (assessment_user_mapping_id, question_id, question_type, answer_data, is_correct, score)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+         answer_data = VALUES(answer_data), 
+         is_correct = VALUES(is_correct),
+         score = VALUES(score),
+         updated_at = NOW()`,
+      [assessment_user_mapping_id, question_id, question_type, JSON.stringify(answer), is_correct, score]
     );
 
     return true;
@@ -966,8 +984,12 @@ class ProctoringLog {
       `INSERT INTO proctoring_logs 
        (assessment_user_mapping_id, event_type, event_timestamp, metadata, segment_id)
        VALUES (?, ?, NOW(), ?, ?)`,
-      [data.assessment_user_mapping_id, data.event_type, 
-       data.metadata ? JSON.stringify(data.metadata) : null, data.segment_id]
+      [
+        data.assessment_user_mapping_id, 
+        data.event_type, 
+        data.metadata ? JSON.stringify(data.metadata) : null, 
+        data.segment_id ?? null  // Convert undefined to null for MySQL
+      ]
     );
     return result.insertId;
   }
