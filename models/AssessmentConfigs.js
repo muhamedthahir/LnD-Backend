@@ -955,6 +955,7 @@ class UserQuestionAssignment {
     }
     return answers;
   }
+  
 }
 
 /**
