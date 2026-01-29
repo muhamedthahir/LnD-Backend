@@ -20,8 +20,12 @@ class AssessmentUserMapping {
         submitted_at DATETIME DEFAULT NULL,
         total_time_worked INT DEFAULT 0,
         current_segment_index INT DEFAULT 0,
+        current_question_index INT DEFAULT 0,
+        time_remaining INT DEFAULT 0,
+        segment_time_remaining INT DEFAULT 0,
         last_activity_at DATETIME DEFAULT NULL,
         resume_count INT DEFAULT 0,
+        attempt_count INT DEFAULT 1,
         total_score DECIMAL(10,2) DEFAULT 0,
         max_possible_score DECIMAL(10,2) DEFAULT 0,
         percentage_score DECIMAL(5,2) DEFAULT 0,
@@ -49,9 +53,36 @@ class AssessmentUserMapping {
     try {
       await pool.execute(createTableSQL);
       console.log('AssessmentUserMapping table created or already exists');
+      
+      // Add missing columns for existing installations
+      await this.addMissingColumns();
     } catch (error) {
       console.error('Error creating assessment_user_mappings table:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Add missing columns to existing table
+   */
+  static async addMissingColumns() {
+    const columnsToAdd = [
+      { name: 'current_question_index', definition: 'INT DEFAULT 0' },
+      { name: 'time_remaining', definition: 'INT DEFAULT 0' },
+      { name: 'segment_time_remaining', definition: 'INT DEFAULT 0' },
+      { name: 'attempt_count', definition: 'INT DEFAULT 1' }
+    ];
+
+    for (const col of columnsToAdd) {
+      try {
+        await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN ${col.name} ${col.definition}`);
+        console.log(`Added column ${col.name} to assessment_user_mappings`);
+      } catch (error) {
+        // Column already exists - ignore
+        if (!error.message.includes('Duplicate column')) {
+          console.log(`Column ${col.name} already exists or error:`, error.message);
+        }
+      }
     }
   }
 
@@ -311,6 +342,7 @@ class AssessmentUserMapping {
       [mapping.assessment_administrator_id]
     );
 
+    let totalTime = 0;
     if (timingConfig[0]) {
       const now = new Date();
       if (timingConfig[0].start_date_time && new Date(timingConfig[0].start_date_time) > now) {
@@ -319,17 +351,35 @@ class AssessmentUserMapping {
       if (timingConfig[0].end_date_time && new Date(timingConfig[0].end_date_time) < now) {
         throw new Error('Assessment has expired');
       }
+      totalTime = timingConfig[0].total_time || 0;
     }
+
+    // Get first segment duration for initial segment_time_remaining
+    const [admin] = await pool.execute(
+      'SELECT assessment_id FROM assessment_administrators WHERE id = ?',
+      [mapping.assessment_administrator_id]
+    );
+    const [segments] = await pool.execute(
+      'SELECT segment_duration FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order LIMIT 1',
+      [admin[0].assessment_id]
+    );
+    const firstSegmentDuration = segments[0]?.segment_duration || 0;
+
+    // Check if this is a re-attempt (already has an attempt)
+    const isReAttempt = mapping.assessment_started_time !== null;
 
     await pool.execute(
       `UPDATE assessment_user_mappings SET
          status = 'IN_PROGRESS',
-         assessment_started_time = NOW(),
+         assessment_started_time = COALESCE(assessment_started_time, NOW()),
          last_activity_at = NOW(),
          ip_address = ?,
-         browser_info = ?
+         browser_info = ?,
+         time_remaining = CASE WHEN time_remaining > 0 THEN time_remaining ELSE ? END,
+         segment_time_remaining = CASE WHEN segment_time_remaining > 0 THEN segment_time_remaining ELSE ? END,
+         attempt_count = attempt_count + CASE WHEN ? THEN 1 ELSE 0 END
        WHERE id = ?`,
-      [ip_address, browser_info, id]
+      [ip_address, browser_info, totalTime, firstSegmentDuration, isReAttempt, id]
     );
 
     // Assign questions to user
@@ -674,6 +724,46 @@ class AssessmentUserMapping {
   }
 
   /**
+   * Save progress (periodic auto-save of timer and position)
+   */
+  static async saveProgress(id, data) {
+    const updates = ['last_activity_at = NOW()'];
+    const params = [];
+
+    if (data.current_segment_index !== undefined) {
+      updates.push('current_segment_index = ?');
+      params.push(data.current_segment_index);
+    }
+
+    if (data.current_question_index !== undefined) {
+      updates.push('current_question_index = ?');
+      params.push(data.current_question_index);
+    }
+
+    if (data.time_remaining !== undefined) {
+      updates.push('time_remaining = ?');
+      params.push(data.time_remaining);
+    }
+
+    if (data.segment_time_remaining !== undefined) {
+      updates.push('segment_time_remaining = ?');
+      params.push(data.segment_time_remaining);
+    }
+
+    if (data.total_time_worked !== undefined) {
+      updates.push('total_time_worked = ?');
+      params.push(data.total_time_worked);
+    }
+
+    params.push(id);
+
+    await pool.execute(
+      `UPDATE assessment_user_mappings SET ${updates.join(', ')} WHERE id = ?`,
+      params
+    );
+  }
+
+  /**
    * Submit assessment
    */
   static async submitAssessment(id) {
@@ -751,7 +841,7 @@ class AssessmentUserMapping {
       const [progSubmissions] = await pool.execute(
         `SELECT ps.*, uqa.weightage
          FROM programming_submissions ps
-         JOIN user_question_assignments uqa ON ps.question_id = uqa.question_id 
+         JOIN user_question_assignments uqa ON ps.programming_question_id = uqa.question_id 
            AND uqa.assessment_user_mapping_id = ? 
            AND uqa.assessment_segment_id = ?
            AND uqa.question_type = 'PROGRAMMING'
@@ -763,7 +853,7 @@ class AssessmentUserMapping {
       const [mcqSubmissions] = await pool.execute(
         `SELECT ms.*, uqa.weightage
          FROM mcq_submissions ms
-         JOIN user_question_assignments uqa ON ms.question_id = uqa.question_id 
+         JOIN user_question_assignments uqa ON ms.mcq_question_id = uqa.question_id 
            AND uqa.assessment_user_mapping_id = ? 
            AND uqa.assessment_segment_id = ?
            AND uqa.question_type = 'MCQ'
@@ -837,6 +927,86 @@ class AssessmentUserMapping {
     await pool.execute(
       'UPDATE assessment_user_mappings SET status = ? WHERE id = ?',
       [status, id]
+    );
+    return true;
+  }
+
+  /**
+   * Update current segment index
+   */
+  static async updateSegmentIndex(id, segment_index) {
+    await pool.execute(
+      'UPDATE assessment_user_mappings SET current_segment_index = ? WHERE id = ?',
+      [segment_index, id]
+    );
+    return true;
+  }
+
+  /**
+   * Save progress (called periodically during assessment)
+   */
+  static async saveProgress(id, data) {
+    const updates = ['last_activity_at = NOW()'];
+    const params = [];
+
+    if (data.current_segment_index !== undefined) {
+      updates.push('current_segment_index = ?');
+      params.push(data.current_segment_index);
+    }
+
+    if (data.current_question_index !== undefined) {
+      updates.push('current_question_index = ?');
+      params.push(data.current_question_index);
+    }
+
+    if (data.time_remaining !== undefined) {
+      updates.push('time_remaining = ?');
+      params.push(data.time_remaining);
+    }
+
+    if (data.segment_time_remaining !== undefined) {
+      updates.push('segment_time_remaining = ?');
+      params.push(data.segment_time_remaining);
+    }
+
+    if (data.total_time_worked !== undefined) {
+      updates.push('total_time_worked = ?');
+      params.push(data.total_time_worked);
+    }
+
+    params.push(id);
+
+    await pool.execute(
+      `UPDATE assessment_user_mappings SET ${updates.join(', ')} WHERE id = ?`,
+      params
+    );
+
+    return true;
+  }
+
+  /**
+   * Resume assessment (increment resume count)
+   */
+  static async resume(id) {
+    await pool.execute(
+      `UPDATE assessment_user_mappings 
+       SET resume_count = COALESCE(resume_count, 0) + 1, 
+           last_activity_at = NOW()
+       WHERE id = ?`,
+      [id]
+    );
+    return true;
+  }
+
+  /**
+   * Increment attempt count (when trying to re-open)
+   */
+  static async incrementAttemptCount(id) {
+    await pool.execute(
+      `UPDATE assessment_user_mappings 
+       SET attempt_count = COALESCE(attempt_count, 0) + 1
+       WHERE id = ?`,
+      [id]
     );
     return true;
   }
