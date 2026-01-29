@@ -3,6 +3,8 @@ const Assessment = require('../models/Assessment');
 const AssessmentSegment = require('../models/AssessmentSegment');
 const AssessmentAdministrator = require('../models/AssessmentAdministrator');
 const AssessmentUserMapping = require('../models/AssessmentUserMapping');
+const MCQSubmission = require('../models/MCQSubmission');
+const ProgrammingSubmission = require('../models/ProgrammingSubmission');
 const {
   TimingConfig,
   ProctoringConfig,
@@ -1426,17 +1428,35 @@ const saveAnswer = async (req, res) => {
       }
     }
 
-    // Save or update the answer in user_question_submissions
-    await UserQuestionAssignment.saveAnswer({
-      assessment_user_mapping_id: mapping_id,
-      question_id,
-      question_type,
-      answer,
-      is_correct: isCorrect,
-      score
-    });
+    // Get segment_id from segment_index
+    const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(mapping_id, mapping.current_segment_index);
 
-    // Update segment progress
+    // Get correct options for MCQ to pass to submission
+    let correctOptions = [];
+    if (question_type === 'MCQ') {
+      const [correctOpts] = await pool.execute(
+        `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
+        [question_id]
+      );
+      correctOptions = correctOpts.map(o => o.id);
+    }
+
+    // Save or update the answer in mcq_submissions table
+    if (question_type === 'MCQ') {
+      await MCQSubmission.createOrUpdateForAssessment({
+        user_id: req.user.id,
+        assessment_user_mapping_id: mapping_id,
+        assessment_segment_id: segment_id,
+        mcq_question_id: question_id,
+        selected_options: Array.isArray(answer) ? answer : (answer?.selected_options || [answer]),
+        correct_options: correctOptions,
+        is_correct: isCorrect,
+        score: score || 0,
+        max_score: 100
+      });
+    }
+
+    // Update segment progress (attempted questions count)
     await AssessmentSegmentProgress.updateQuestionProgress(
       mapping_id,
       mapping.current_segment_index,
@@ -1444,13 +1464,25 @@ const saveAnswer = async (req, res) => {
       question_type
     );
 
+    // Update segment score from all submissions
+    let segmentScore = null;
+    let mappingScore = null;
+    if (segment_id) {
+      segmentScore = await AssessmentSegmentProgress.updateSegmentScore(mapping_id, segment_id);
+      // Cascade: update mapping total score from all segment scores
+      mappingScore = await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
+    }
+
     // Update mapping last activity
     await AssessmentUserMapping.updateActivity(mapping_id, {});
 
     res.json({ 
       message: 'Answer saved',
       is_correct: isCorrect,
-      score
+      score,
+      segment_score: segmentScore,
+      total_score: mappingScore?.totalScore,
+      percentage_score: mappingScore?.percentageScore
     });
   } catch (error) {
     console.error('Error saving answer:', error);
@@ -1469,7 +1501,9 @@ const saveProgress = async (req, res) => {
       current_question_index, 
       time_remaining, 
       segment_time_remaining,
-      total_time_worked 
+      total_time_worked,
+      segment_id,
+      time_spent
     } = req.body;
 
     const mapping = await AssessmentUserMapping.findById(mapping_id);
@@ -1493,6 +1527,27 @@ const saveProgress = async (req, res) => {
       segment_time_remaining,
       total_time_worked
     });
+
+    // Update segment progress if segment_id is provided or we can determine it
+    let actualSegmentId = segment_id;
+    if (!actualSegmentId && current_segment_index !== undefined) {
+      const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+      if (admin) {
+        const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+        if (segments && segments[current_segment_index]) {
+          actualSegmentId = segments[current_segment_index].id;
+        }
+      }
+    }
+
+    if (actualSegmentId) {
+      await AssessmentSegmentProgress.updateProgressByMappingAndSegment(mapping_id, actualSegmentId, {
+        time_remaining: segment_time_remaining,
+        time_used: time_spent,
+        current_question_index: current_question_index,
+        status: 'IN_PROGRESS'
+      });
+    }
 
     res.json({ message: 'Progress saved' });
   } catch (error) {
@@ -1616,32 +1671,41 @@ const submitCode = async (req, res) => {
 
     const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
 
-    // Save the code submission with results
-    const result = await UserQuestionAssignment.submitCode({
+    // Get segment_id from segment_index
+    const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(mapping_id, mapping.current_segment_index);
+
+    // Save the code submission in programming_submissions table
+    const result = await ProgrammingSubmission.createOrUpdateForAssessment({
+      user_id: req.user.id,
       assessment_user_mapping_id: mapping_id,
-      question_id,
-      code,
-      language,
+      assessment_segment_id: segment_id,
+      programming_question_id: question_id,
+      submitted_code: code,
+      language_used: language,
+      status: testCasesPassed === totalTestCases ? 'passed' : 'failed',
       test_cases_passed: testCasesPassed,
       test_cases_total: totalTestCases,
-      score
+      score: earnedPoints,  // Use earned points as the actual score
+      max_score: totalPoints,
+      execution_result: testResults
     });
 
-    // Also save as answer for consistency
-    await UserQuestionAssignment.saveAnswer({
-      assessment_user_mapping_id: mapping_id,
-      question_id,
-      question_type: 'PROGRAMMING',
-      answer: { code, language, test_cases_passed: testCasesPassed, test_cases_total: totalTestCases, score }
-    });
-
-    // Update segment progress
+    // Update segment progress (attempted questions count)
     await AssessmentSegmentProgress.updateQuestionProgress(
       mapping_id,
       mapping.current_segment_index,
       question_id,
       'PROGRAMMING'
     );
+
+    // Update segment score from all submissions
+    let segmentScore = null;
+    let mappingScore = null;
+    if (segment_id) {
+      segmentScore = await AssessmentSegmentProgress.updateSegmentScore(mapping_id, segment_id);
+      // Cascade: update mapping total score from all segment scores
+      mappingScore = await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
+    }
 
     // Update mapping last activity
     await AssessmentUserMapping.updateActivity(mapping_id, {});
@@ -1652,6 +1716,11 @@ const submitCode = async (req, res) => {
       test_cases_passed: testCasesPassed,
       test_cases_total: totalTestCases,
       score,
+      earned_points: earnedPoints,
+      total_points: totalPoints,
+      segment_score: segmentScore,
+      total_score: mappingScore?.totalScore,
+      percentage_score: mappingScore?.percentageScore,
       // Return visible test case results (not hidden ones' details)
       results: testResults.filter(r => !r.is_hidden).map(r => ({
         passed: r.passed,

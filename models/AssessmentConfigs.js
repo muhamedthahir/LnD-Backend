@@ -703,6 +703,48 @@ class AssessmentSegmentProgress {
   }
 
   /**
+   * Update progress by mapping_id and segment_id
+   */
+  static async updateProgressByMappingAndSegment(assessment_user_mapping_id, assessment_segment_id, data) {
+    const updates = ['last_updated_at = NOW()'];
+    const params = [];
+
+    if (data.time_used !== undefined && data.time_used !== null) {
+      updates.push('time_used = ?');
+      params.push(data.time_used);
+    }
+    if (data.time_remaining !== undefined && data.time_remaining !== null) {
+      updates.push('time_remaining = ?');
+      params.push(data.time_remaining);
+    }
+    if (data.attempted_questions !== undefined) {
+      updates.push('attempted_questions = ?');
+      params.push(data.attempted_questions);
+    }
+    if (data.current_question_index !== undefined && data.current_question_index !== null) {
+      updates.push('current_question_index = ?');
+      params.push(data.current_question_index);
+    }
+    if (data.score !== undefined) {
+      updates.push('score = ?');
+      params.push(data.score);
+    }
+    if (data.status !== undefined) {
+      updates.push('status = ?');
+      params.push(data.status);
+    }
+
+    params.push(assessment_user_mapping_id, assessment_segment_id);
+    
+    await pool.execute(
+      `UPDATE assessment_segment_progress SET ${updates.join(', ')} 
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+      params
+    );
+    return true;
+  }
+
+  /**
    * Mark a segment as completed
    */
   static async markSegmentCompleted(assessment_user_mapping_id, segment_index) {
@@ -774,6 +816,100 @@ class AssessmentSegmentProgress {
 
     return true;
   }
+
+  /**
+   * Update segment score from the sum of all question submissions
+   */
+  static async updateSegmentScore(assessment_user_mapping_id, assessment_segment_id) {
+    // Calculate MCQ scores from mcq_submissions table
+    const [mcqResult] = await pool.execute(
+      `SELECT COALESCE(SUM(last_score), 0) as total_score
+       FROM mcq_submissions 
+       WHERE assessment_user_mapping_id = ? 
+         AND assessment_segment_id = ?`,
+      [assessment_user_mapping_id, assessment_segment_id]
+    );
+
+    // Calculate Programming scores from programming_submissions table
+    const [progResult] = await pool.execute(
+      `SELECT COALESCE(SUM(last_score), 0) as total_score
+       FROM programming_submissions 
+       WHERE assessment_user_mapping_id = ? 
+         AND assessment_segment_id = ?`,
+      [assessment_user_mapping_id, assessment_segment_id]
+    );
+
+    const mcqScore = parseFloat(mcqResult[0]?.total_score || 0);
+    const progScore = parseFloat(progResult[0]?.total_score || 0);
+    const totalScore = mcqScore + progScore;
+
+    // Update segment progress with calculated score
+    await pool.execute(
+      `UPDATE assessment_segment_progress 
+       SET score = ? 
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+      [totalScore, assessment_user_mapping_id, assessment_segment_id]
+    );
+
+    return totalScore;
+  }
+
+  /**
+   * Update total mapping score from all segment scores
+   */
+  static async updateMappingTotalScore(assessment_user_mapping_id) {
+    // Sum all segment scores for this mapping
+    const [result] = await pool.execute(
+      `SELECT COALESCE(SUM(score), 0) as total_score
+       FROM assessment_segment_progress 
+       WHERE assessment_user_mapping_id = ?`,
+      [assessment_user_mapping_id]
+    );
+
+    const totalScore = parseFloat(result[0]?.total_score || 0);
+
+    // Get max possible score from mapping
+    const [mappingResult] = await pool.execute(
+      `SELECT max_possible_score FROM assessment_user_mappings WHERE id = ?`,
+      [assessment_user_mapping_id]
+    );
+
+    const maxPossibleScore = parseFloat(mappingResult[0]?.max_possible_score || 0);
+    const percentageScore = maxPossibleScore > 0 ? (totalScore / maxPossibleScore * 100) : 0;
+
+    // Update mapping with total score
+    await pool.execute(
+      `UPDATE assessment_user_mappings 
+       SET total_score = ?, percentage_score = ?
+       WHERE id = ?`,
+      [totalScore, percentageScore.toFixed(2), assessment_user_mapping_id]
+    );
+
+    return { totalScore, percentageScore: parseFloat(percentageScore.toFixed(2)) };
+  }
+
+  /**
+   * Get segment ID by mapping and index
+   */
+  static async getSegmentIdByIndex(assessment_user_mapping_id, segment_index) {
+    const [mappingRows] = await pool.execute(
+      `SELECT aa.assessment_id 
+       FROM assessment_user_mappings aum
+       JOIN assessment_administrators aa ON aum.assessment_administrator_id = aa.id
+       WHERE aum.id = ?`,
+      [assessment_user_mapping_id]
+    );
+
+    if (mappingRows.length === 0) return null;
+
+    const safeSegmentIndex = parseInt(segment_index) || 0;
+    const [segments] = await pool.execute(
+      `SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT 1 OFFSET ${safeSegmentIndex}`,
+      [mappingRows[0].assessment_id]
+    );
+
+    return segments.length > 0 ? segments[0].id : null;
+  }
 }
 
 /**
@@ -836,16 +972,17 @@ class UserQuestionAssignment {
   }
 
   /**
-   * Save or update an answer
+   * Save or update an answer (MCQ submission)
    */
   static async saveAnswer(data) {
-    const { assessment_user_mapping_id, question_id, question_type, answer, is_correct, score } = data;
+    const { assessment_user_mapping_id, assessment_segment_id, question_id, question_type, answer, is_correct, score } = data;
     
-    // Ensure user_question_submissions table exists with is_correct and score columns
+    // Ensure user_question_submissions table exists with all required columns
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS user_question_submissions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         assessment_user_mapping_id INT NOT NULL,
+        assessment_segment_id INT DEFAULT NULL,
         question_id INT NOT NULL,
         question_type ENUM('PROGRAMMING', 'MCQ') NOT NULL,
         answer_data JSON DEFAULT NULL,
@@ -855,29 +992,34 @@ class UserQuestionAssignment {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY unique_submission (assessment_user_mapping_id, question_id, question_type),
         INDEX idx_mapping (assessment_user_mapping_id),
+        INDEX idx_segment (assessment_segment_id),
         FOREIGN KEY (assessment_user_mapping_id) REFERENCES assessment_user_mappings(id) ON DELETE CASCADE
       )
     `);
 
-    // Add is_correct and score columns if they don't exist (for existing tables)
+    // Add missing columns if they don't exist (for existing tables)
     try {
       await pool.execute(`ALTER TABLE user_question_submissions ADD COLUMN is_correct BOOLEAN DEFAULT NULL`);
     } catch (e) { /* Column may already exist */ }
     try {
       await pool.execute(`ALTER TABLE user_question_submissions ADD COLUMN score DECIMAL(10,2) DEFAULT NULL`);
     } catch (e) { /* Column may already exist */ }
+    try {
+      await pool.execute(`ALTER TABLE user_question_submissions ADD COLUMN assessment_segment_id INT DEFAULT NULL`);
+    } catch (e) { /* Column may already exist */ }
 
-    // Upsert the answer with score
+    // Upsert the answer with score and segment_id
     await pool.execute(
       `INSERT INTO user_question_submissions 
-       (assessment_user_mapping_id, question_id, question_type, answer_data, is_correct, score)
-       VALUES (?, ?, ?, ?, ?, ?)
+       (assessment_user_mapping_id, assessment_segment_id, question_id, question_type, answer_data, is_correct, score)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE 
+         assessment_segment_id = VALUES(assessment_segment_id),
          answer_data = VALUES(answer_data), 
          is_correct = VALUES(is_correct),
          score = VALUES(score),
          updated_at = NOW()`,
-      [assessment_user_mapping_id, question_id, question_type, JSON.stringify(answer), is_correct, score]
+      [assessment_user_mapping_id, assessment_segment_id || null, question_id, question_type, JSON.stringify(answer), is_correct, score]
     );
 
     return true;
@@ -887,13 +1029,14 @@ class UserQuestionAssignment {
    * Submit code for a programming question
    */
   static async submitCode(data) {
-    const { assessment_user_mapping_id, question_id, code, language } = data;
+    const { assessment_user_mapping_id, assessment_segment_id, question_id, code, language, test_cases_passed, test_cases_total, score, execution_result } = data;
 
-    // Ensure code_submissions table exists
+    // Ensure code_submissions table exists with all required columns
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS assessment_code_submissions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         assessment_user_mapping_id INT NOT NULL,
+        assessment_segment_id INT DEFAULT NULL,
         question_id INT NOT NULL,
         code LONGTEXT NOT NULL,
         language VARCHAR(50) NOT NULL,
@@ -904,10 +1047,16 @@ class UserQuestionAssignment {
         test_cases_total INT DEFAULT 0,
         score DECIMAL(10,2) DEFAULT 0,
         INDEX idx_mapping (assessment_user_mapping_id),
+        INDEX idx_segment (assessment_segment_id),
         INDEX idx_question (question_id),
         FOREIGN KEY (assessment_user_mapping_id) REFERENCES assessment_user_mappings(id) ON DELETE CASCADE
       )
     `);
+
+    // Add assessment_segment_id column if it doesn't exist (for existing tables)
+    try {
+      await pool.execute(`ALTER TABLE assessment_code_submissions ADD COLUMN assessment_segment_id INT DEFAULT NULL`);
+    } catch (e) { /* Column may already exist */ }
 
     // Check if submission exists
     const [existing] = await pool.execute(
@@ -916,21 +1065,21 @@ class UserQuestionAssignment {
     );
 
     if (existing.length > 0) {
-      // Update existing submission
+      // Update existing submission with score info and segment_id
       await pool.execute(
         `UPDATE assessment_code_submissions 
-         SET code = ?, language = ?, updated_at = NOW()
+         SET assessment_segment_id = ?, code = ?, language = ?, test_cases_passed = ?, test_cases_total = ?, score = ?, execution_result = ?, updated_at = NOW()
          WHERE assessment_user_mapping_id = ? AND question_id = ?`,
-        [code, language, assessment_user_mapping_id, question_id]
+        [assessment_segment_id || null, code, language, test_cases_passed || 0, test_cases_total || 0, score || 0, execution_result ? JSON.stringify(execution_result) : null, assessment_user_mapping_id, question_id]
       );
       return { id: existing[0].id, updated: true };
     } else {
-      // Create new submission
+      // Create new submission with score info and segment_id
       const [result] = await pool.execute(
         `INSERT INTO assessment_code_submissions 
-         (assessment_user_mapping_id, question_id, code, language)
-         VALUES (?, ?, ?, ?)`,
-        [assessment_user_mapping_id, question_id, code, language]
+         (assessment_user_mapping_id, assessment_segment_id, question_id, code, language, test_cases_passed, test_cases_total, score, execution_result)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [assessment_user_mapping_id, assessment_segment_id || null, question_id, code, language, test_cases_passed || 0, test_cases_total || 0, score || 0, execution_result ? JSON.stringify(execution_result) : null]
       );
       return { id: result.insertId, updated: false };
     }

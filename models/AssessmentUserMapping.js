@@ -11,7 +11,7 @@ class AssessmentUserMapping {
         id INT AUTO_INCREMENT PRIMARY KEY,
         unique_id VARCHAR(50) UNIQUE NOT NULL,
         assessment_administrator_id INT NOT NULL,
-        user_id INT NOT NULL,
+      user_id INT NOT NULL,ass
         status ENUM('INVITED', 'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'ABANDONED', 'EXPIRED', 'DISQUALIFIED') DEFAULT 'INVITED',
         attempt_number INT DEFAULT 1,
         mail_sent_at DATETIME DEFAULT NULL,
@@ -70,7 +70,8 @@ class AssessmentUserMapping {
       { name: 'current_question_index', definition: 'INT DEFAULT 0' },
       { name: 'time_remaining', definition: 'INT DEFAULT 0' },
       { name: 'segment_time_remaining', definition: 'INT DEFAULT 0' },
-      { name: 'attempt_count', definition: 'INT DEFAULT 1' }
+      { name: 'attempt_count', definition: 'INT DEFAULT 1' },
+      { name: 'total_time_worked', definition: 'INT DEFAULT 0' }
     ];
 
     for (const col of columnsToAdd) {
@@ -835,17 +836,16 @@ class AssessmentUserMapping {
     const negativeMarkingEnabled = scoringConfig[0]?.negative_marking_enabled || false;
     const negativeMarkPercentage = scoringConfig[0]?.negative_mark_percentage || 0;
 
-    // First, calculate scores for any MCQ submissions that don't have scores yet
+    // First, calculate scores for any MCQ submissions that don't have scores yet (from mcq_submissions table)
     const [uncalculatedMCQ] = await pool.execute(
-      `SELECT uqs.id, uqs.question_id, uqs.answer_data, uqa.weightage
-       FROM user_question_submissions uqs
-       JOIN user_question_assignments uqa ON uqs.question_id = uqa.question_id 
-         AND uqa.assessment_user_mapping_id = uqs.assessment_user_mapping_id
-         AND uqa.question_type = uqs.question_type
-       WHERE uqs.assessment_user_mapping_id = ? 
-         AND uqs.question_type = 'MCQ' 
-         AND uqs.score IS NULL 
-         AND uqs.answer_data IS NOT NULL`,
+      `SELECT ms.id, ms.mcq_question_id, ms.last_selected_options, ms.correct_options, uqa.weightage
+       FROM mcq_submissions ms
+       LEFT JOIN user_question_assignments uqa ON ms.mcq_question_id = uqa.question_id 
+         AND uqa.assessment_user_mapping_id = ms.assessment_user_mapping_id
+         AND uqa.question_type = 'MCQ'
+       WHERE ms.assessment_user_mapping_id = ? 
+         AND ms.last_score IS NULL 
+         AND ms.last_selected_options IS NOT NULL`,
       [mapping_id]
     );
 
@@ -854,26 +854,21 @@ class AssessmentUserMapping {
         // Get correct options for this MCQ
         const [correctOptions] = await pool.execute(
           `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
-          [sub.question_id]
+          [sub.mcq_question_id]
         );
         const correctIds = correctOptions.map(o => o.id).sort((a, b) => a - b);
         
-        // Parse answer data
-        let answer = sub.answer_data;
-        if (typeof answer === 'string') {
-          try { answer = JSON.parse(answer); } catch (e) { }
+        // Parse selected options
+        let selectedOpts = sub.last_selected_options;
+        if (typeof selectedOpts === 'string') {
+          try { selectedOpts = JSON.parse(selectedOpts); } catch (e) { selectedOpts = []; }
         }
         
-        // Get selected options from answer
-        let selectedIds = [];
-        if (Array.isArray(answer)) {
-          selectedIds = answer.map(id => parseInt(id)).filter(id => !isNaN(id)).sort((a, b) => a - b);
-        } else if (answer && answer.selected_options) {
-          selectedIds = answer.selected_options.map(id => parseInt(id)).filter(id => !isNaN(id)).sort((a, b) => a - b);
-        } else if (typeof answer === 'number' || typeof answer === 'string') {
-          const parsed = parseInt(answer);
-          if (!isNaN(parsed)) selectedIds = [parsed];
-        }
+        // Get selected option IDs
+        const selectedIds = (Array.isArray(selectedOpts) ? selectedOpts : [])
+          .map(id => parseInt(id))
+          .filter(id => !isNaN(id))
+          .sort((a, b) => a - b);
 
         // Check if selected matches correct
         const isCorrect = correctIds.length === selectedIds.length && 
@@ -888,10 +883,10 @@ class AssessmentUserMapping {
           score = -(marks * negativeMarkPercentage / 100);
         }
 
-        // Update the submission with calculated score
+        // Update the mcq_submission with calculated score
         await pool.execute(
-          `UPDATE user_question_submissions SET is_correct = ?, score = ? WHERE id = ?`,
-          [isCorrect, score, sub.id]
+          `UPDATE mcq_submissions SET is_correct = ?, last_score = ?, best_score = GREATEST(COALESCE(best_score, 0), ?) WHERE id = ?`,
+          [isCorrect, score, score, sub.id]
         );
       } catch (e) {
         console.error('Error calculating MCQ score:', e);
@@ -911,30 +906,47 @@ class AssessmentUserMapping {
     const segmentScores = {};
 
     for (const segment of segments) {
-      // Get all submissions from user_question_submissions table
-      const [submissions] = await pool.execute(
-        `SELECT uqs.*, uqa.weightage, uqa.question_type
-         FROM user_question_submissions uqs
-         JOIN user_question_assignments uqa ON uqs.question_id = uqa.question_id 
-           AND uqa.assessment_user_mapping_id = uqs.assessment_user_mapping_id
-           AND uqa.question_type = uqs.question_type
-           AND uqa.assessment_segment_id = ?
-         WHERE uqs.assessment_user_mapping_id = ?`,
-        [segment.assessment_segment_id, mapping_id]
+      // Get MCQ submissions from mcq_submissions table
+      const [mcqSubmissions] = await pool.execute(
+        `SELECT ms.*, uqa.weightage
+         FROM mcq_submissions ms
+         LEFT JOIN user_question_assignments uqa ON ms.mcq_question_id = uqa.question_id 
+           AND uqa.assessment_user_mapping_id = ms.assessment_user_mapping_id
+           AND uqa.question_type = 'MCQ'
+         WHERE ms.assessment_user_mapping_id = ?
+           AND ms.assessment_segment_id = ?`,
+        [mapping_id, segment.assessment_segment_id]
+      );
+
+      // Get programming submissions from programming_submissions table
+      const [progSubmissions] = await pool.execute(
+        `SELECT ps.*, uqa.weightage
+         FROM programming_submissions ps
+         LEFT JOIN user_question_assignments uqa ON ps.programming_question_id = uqa.question_id 
+           AND uqa.assessment_user_mapping_id = ps.assessment_user_mapping_id
+           AND uqa.question_type = 'PROGRAMMING'
+         WHERE ps.assessment_user_mapping_id = ?
+           AND ps.assessment_segment_id = ?`,
+        [mapping_id, segment.assessment_segment_id]
       );
 
       let segmentScore = 0;
 
-      for (const sub of submissions) {
-        // If score is already calculated (e.g., MCQ on save, Programming on submit)
-        if (sub.score !== null && sub.score !== undefined) {
-          segmentScore += parseFloat(sub.score);
+      // Calculate MCQ scores
+      for (const sub of mcqSubmissions) {
+        if (sub.last_score !== null && sub.last_score !== undefined) {
+          segmentScore += parseFloat(sub.last_score);
         } else if (sub.is_correct === true || sub.is_correct === 1) {
-          // Fallback: use weightage if correct
           segmentScore += sub.weightage || 0;
-        } else if (negativeMarkingEnabled && sub.answer_data && sub.is_correct === false) {
-          // Apply negative marking for wrong answers
+        } else if (negativeMarkingEnabled && sub.last_selected_options && sub.is_correct === false) {
           segmentScore -= ((sub.weightage || 0) * negativeMarkPercentage / 100);
+        }
+      }
+
+      // Calculate Programming scores
+      for (const sub of progSubmissions) {
+        if (sub.last_score !== null && sub.last_score !== undefined) {
+          segmentScore += parseFloat(sub.last_score);
         }
       }
 
@@ -961,7 +973,9 @@ class AssessmentUserMapping {
         obtained: segmentScore,
         total: segmentMaxScore[0].total || 0,
         percentage: segmentMaxScore[0].total ? (segmentScore / segmentMaxScore[0].total * 100).toFixed(2) : 0,
-        timeUsed: segment.time_used
+        timeUsed: segment.time_used,
+        mcq_count: mcqSubmissions.length,
+        programming_count: progSubmissions.length
       };
     }
 

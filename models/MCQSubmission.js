@@ -3,6 +3,158 @@ const Submission = require('./Submission');
 
 class MCQSubmission {
   /**
+   * Ensure assessment columns exist in mcq_submissions table
+   */
+  static async ensureAssessmentColumns() {
+    const columnsToAdd = [
+      { name: 'assessment_user_mapping_id', definition: 'INT DEFAULT NULL' },
+      { name: 'assessment_segment_id', definition: 'INT DEFAULT NULL' }
+    ];
+
+    for (const col of columnsToAdd) {
+      try {
+        await pool.execute(`ALTER TABLE mcq_submissions ADD COLUMN ${col.name} ${col.definition}`);
+        console.log(`Added column ${col.name} to mcq_submissions`);
+      } catch (e) {
+        // Column already exists - ignore
+      }
+    }
+
+    // Add indexes if they don't exist
+    try {
+      await pool.execute(`ALTER TABLE mcq_submissions ADD INDEX idx_assessment_mapping (assessment_user_mapping_id)`);
+    } catch (e) { /* Index may already exist */ }
+    try {
+      await pool.execute(`ALTER TABLE mcq_submissions ADD INDEX idx_assessment_segment (assessment_segment_id)`);
+    } catch (e) { /* Index may already exist */ }
+  }
+
+  /**
+   * Create or update MCQ submission for assessment
+   * @param {Object} data - submission data for assessment
+   */
+  static async createOrUpdateForAssessment(data) {
+    const {
+      user_id,
+      assessment_user_mapping_id,
+      assessment_segment_id,
+      mcq_question_id,
+      selected_options,
+      correct_options,
+      is_correct = false,
+      score = 0,
+      max_score = 100,
+      time_spent_seconds = 0
+    } = data;
+
+    // Ensure assessment columns exist
+    await this.ensureAssessmentColumns();
+
+    // Check if submission exists for this assessment
+    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, mcq_question_id);
+
+    if (existing) {
+      // Determine if this is the best submission
+      const isBestScore = score > existing.best_score;
+
+      // Update existing submission
+      await pool.execute(
+        `UPDATE mcq_submissions SET
+           assessment_segment_id = ?,
+           last_selected_options = ?,
+           best_selected_options = CASE WHEN ? THEN ? ELSE best_selected_options END,
+           correct_options = ?,
+           is_correct = CASE WHEN ? THEN TRUE ELSE is_correct END,
+           best_score = CASE WHEN ? THEN ? ELSE best_score END,
+           last_score = ?,
+           status = 'answered',
+           attempt_count = attempt_count + 1,
+           total_time_spent_seconds = total_time_spent_seconds + ?,
+           last_answered_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          assessment_segment_id,
+          JSON.stringify(selected_options),
+          isBestScore, JSON.stringify(selected_options),
+          JSON.stringify(correct_options),
+          is_correct,
+          isBestScore, score,
+          score,
+          time_spent_seconds,
+          existing.id
+        ]
+      );
+
+      return { id: existing.id, updated: true, score, is_correct };
+    } else {
+      // Create new submission for assessment (no base submission needed)
+      const [result] = await pool.execute(
+        `INSERT INTO mcq_submissions 
+         (user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id,
+          status, last_selected_options, best_selected_options, correct_options,
+          is_correct, best_score, last_score, max_score, attempt_count,
+          total_time_spent_seconds, first_answered_at, last_answered_at)
+         VALUES (?, ?, ?, ?, 'answered', ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id,
+          JSON.stringify(selected_options), JSON.stringify(selected_options), JSON.stringify(correct_options),
+          is_correct, score, score, max_score,
+          time_spent_seconds
+        ]
+      );
+
+      return { id: result.insertId, updated: false, score, is_correct };
+    }
+  }
+
+  /**
+   * Find submission by assessment mapping and question
+   */
+  static async findByAssessmentAndQuestion(assessment_user_mapping_id, mcq_question_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM mcq_submissions WHERE assessment_user_mapping_id = ? AND mcq_question_id = ?',
+      [assessment_user_mapping_id, mcq_question_id]
+    );
+    return rows[0] || null;
+  }
+
+  /**
+   * Get all MCQ submissions for an assessment mapping
+   */
+  static async findByAssessmentMapping(assessment_user_mapping_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM mcq_submissions WHERE assessment_user_mapping_id = ?',
+      [assessment_user_mapping_id]
+    );
+    return rows;
+  }
+
+  /**
+   * Get MCQ submissions for an assessment segment
+   */
+  static async findByAssessmentSegment(assessment_user_mapping_id, assessment_segment_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM mcq_submissions WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
+      [assessment_user_mapping_id, assessment_segment_id]
+    );
+    return rows;
+  }
+
+  /**
+   * Get total score for an assessment segment (MCQ only)
+   */
+  static async getSegmentScore(assessment_user_mapping_id, assessment_segment_id) {
+    const [result] = await pool.execute(
+      `SELECT COALESCE(SUM(last_score), 0) as total_score
+       FROM mcq_submissions 
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+      [assessment_user_mapping_id, assessment_segment_id]
+    );
+    return parseFloat(result[0]?.total_score || 0);
+  }
+
+  /**
    * Create or update MCQ submission
    * @param {Object} data - submission data
    */

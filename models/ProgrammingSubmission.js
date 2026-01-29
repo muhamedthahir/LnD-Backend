@@ -3,6 +3,178 @@ const Submission = require('./Submission');
 
 class ProgrammingSubmission {
   /**
+   * Ensure assessment columns exist in programming_submissions table
+   */
+  static async ensureAssessmentColumns() {
+    const columnsToAdd = [
+      { name: 'assessment_user_mapping_id', definition: 'INT DEFAULT NULL' },
+      { name: 'assessment_segment_id', definition: 'INT DEFAULT NULL' },
+      { name: 'execution_result', definition: 'JSON DEFAULT NULL' }
+    ];
+
+    for (const col of columnsToAdd) {
+      try {
+        await pool.execute(`ALTER TABLE programming_submissions ADD COLUMN ${col.name} ${col.definition}`);
+        console.log(`Added column ${col.name} to programming_submissions`);
+      } catch (e) {
+        // Column already exists - ignore
+      }
+    }
+
+    // Add indexes if they don't exist
+    try {
+      await pool.execute(`ALTER TABLE programming_submissions ADD INDEX idx_assessment_mapping (assessment_user_mapping_id)`);
+    } catch (e) { /* Index may already exist */ }
+    try {
+      await pool.execute(`ALTER TABLE programming_submissions ADD INDEX idx_assessment_segment (assessment_segment_id)`);
+    } catch (e) { /* Index may already exist */ }
+  }
+
+  /**
+   * Create or update programming submission for assessment
+   * @param {Object} data - submission data for assessment
+   */
+  static async createOrUpdateForAssessment(data) {
+    const {
+      user_id,
+      assessment_user_mapping_id,
+      assessment_segment_id,
+      programming_question_id,
+      submitted_code,
+      language_used,
+      status = 'pending',
+      test_cases_passed = 0,
+      test_cases_total = 0,
+      score = 0,
+      max_score = 100,
+      execution_time_ms = null,
+      output = null,
+      error_message = null,
+      execution_result = null
+    } = data;
+
+    // Ensure assessment columns exist
+    await this.ensureAssessmentColumns();
+
+    // Check if submission exists for this assessment
+    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, programming_question_id);
+
+    const successful = test_cases_total > 0 && test_cases_passed === test_cases_total;
+
+    if (existing) {
+      // Determine if this is the best submission
+      const isBestScore = score > existing.best_score;
+      const isBestTests = test_cases_passed > existing.best_test_cases_passed;
+
+      // Update existing submission
+      await pool.execute(
+        `UPDATE programming_submissions SET
+           assessment_segment_id = ?,
+           last_submitted_code = ?,
+           language_used = ?,
+           status = ?,
+           submission_count = submission_count + 1,
+           successful_submission = CASE WHEN ? THEN TRUE ELSE successful_submission END,
+           best_test_cases_passed = CASE WHEN ? THEN ? ELSE best_test_cases_passed END,
+           last_test_cases_passed = ?,
+           test_cases_total = ?,
+           best_score = CASE WHEN ? THEN ? ELSE best_score END,
+           last_score = ?,
+           best_submitted_code = CASE WHEN ? THEN ? ELSE best_submitted_code END,
+           best_submitted_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE best_submitted_at END,
+           last_submitted_at = CURRENT_TIMESTAMP,
+           execution_result = ?,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          assessment_segment_id,
+          submitted_code,
+          language_used,
+          status,
+          successful,
+          isBestTests, test_cases_passed,
+          test_cases_passed,
+          test_cases_total,
+          isBestScore, score,
+          score,
+          isBestScore, submitted_code,
+          isBestScore,
+          execution_result ? JSON.stringify(execution_result) : null,
+          existing.id
+        ]
+      );
+
+      return { id: existing.id, updated: true, score, test_cases_passed, test_cases_total };
+    } else {
+      // Create new submission for assessment (no base submission needed)
+      const [result] = await pool.execute(
+        `INSERT INTO programming_submissions 
+         (user_id, programming_question_id, assessment_user_mapping_id, assessment_segment_id,
+          status, best_submitted_code, last_submitted_code, language_used,
+          submission_count, successful_submission, best_test_cases_passed,
+          last_test_cases_passed, test_cases_total, best_score, last_score, max_score,
+          execution_result, first_submitted_at, last_submitted_at, best_submitted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          user_id, programming_question_id, assessment_user_mapping_id, assessment_segment_id,
+          status, submitted_code, submitted_code, language_used,
+          successful, test_cases_passed, test_cases_passed, test_cases_total,
+          score, score, max_score,
+          execution_result ? JSON.stringify(execution_result) : null
+        ]
+      );
+
+      return { id: result.insertId, updated: false, score, test_cases_passed, test_cases_total };
+    }
+  }
+
+  /**
+   * Find submission by assessment mapping and question
+   */
+  static async findByAssessmentAndQuestion(assessment_user_mapping_id, programming_question_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM programming_submissions WHERE assessment_user_mapping_id = ? AND programming_question_id = ?',
+      [assessment_user_mapping_id, programming_question_id]
+    );
+    return rows[0] || null;
+  }
+
+  /**
+   * Get all programming submissions for an assessment mapping
+   */
+  static async findByAssessmentMapping(assessment_user_mapping_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM programming_submissions WHERE assessment_user_mapping_id = ?',
+      [assessment_user_mapping_id]
+    );
+    return rows;
+  }
+
+  /**
+   * Get programming submissions for an assessment segment
+   */
+  static async findByAssessmentSegment(assessment_user_mapping_id, assessment_segment_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM programming_submissions WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
+      [assessment_user_mapping_id, assessment_segment_id]
+    );
+    return rows;
+  }
+
+  /**
+   * Get total score for an assessment segment (Programming only)
+   */
+  static async getSegmentScore(assessment_user_mapping_id, assessment_segment_id) {
+    const [result] = await pool.execute(
+      `SELECT COALESCE(SUM(last_score), 0) as total_score
+       FROM programming_submissions 
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+      [assessment_user_mapping_id, assessment_segment_id]
+    );
+    return parseFloat(result[0]?.total_score || 0);
+  }
+
+  /**
    * Create or update programming submission
    * @param {Object} data - submission data
    */
