@@ -824,6 +824,69 @@ class AssessmentUserMapping {
     const negativeMarkingEnabled = scoringConfig[0]?.negative_marking_enabled || false;
     const negativeMarkPercentage = scoringConfig[0]?.negative_mark_percentage || 0;
 
+    // First, calculate scores for any MCQ submissions that don't have scores yet
+    const [uncalculatedMCQ] = await pool.execute(
+      `SELECT uqs.id, uqs.question_id, uqs.answer_data, uqa.weightage
+       FROM user_question_submissions uqs
+       JOIN user_question_assignments uqa ON uqs.question_id = uqa.question_id 
+         AND uqa.assessment_user_mapping_id = uqs.assessment_user_mapping_id
+         AND uqa.question_type = uqs.question_type
+       WHERE uqs.assessment_user_mapping_id = ? 
+         AND uqs.question_type = 'MCQ' 
+         AND uqs.score IS NULL 
+         AND uqs.answer_data IS NOT NULL`,
+      [mapping_id]
+    );
+
+    for (const sub of uncalculatedMCQ) {
+      try {
+        // Get correct options for this MCQ
+        const [correctOptions] = await pool.execute(
+          `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
+          [sub.question_id]
+        );
+        const correctIds = correctOptions.map(o => o.id).sort((a, b) => a - b);
+        
+        // Parse answer data
+        let answer = sub.answer_data;
+        if (typeof answer === 'string') {
+          try { answer = JSON.parse(answer); } catch (e) { }
+        }
+        
+        // Get selected options from answer
+        let selectedIds = [];
+        if (Array.isArray(answer)) {
+          selectedIds = answer.map(id => parseInt(id)).filter(id => !isNaN(id)).sort((a, b) => a - b);
+        } else if (answer && answer.selected_options) {
+          selectedIds = answer.selected_options.map(id => parseInt(id)).filter(id => !isNaN(id)).sort((a, b) => a - b);
+        } else if (typeof answer === 'number' || typeof answer === 'string') {
+          const parsed = parseInt(answer);
+          if (!isNaN(parsed)) selectedIds = [parsed];
+        }
+
+        // Check if selected matches correct
+        const isCorrect = correctIds.length === selectedIds.length && 
+                          correctIds.every((id, idx) => id === selectedIds[idx]);
+
+        // Calculate score
+        const marks = sub.weightage || 1;
+        let score = 0;
+        if (isCorrect) {
+          score = marks;
+        } else if (selectedIds.length > 0 && negativeMarkingEnabled) {
+          score = -(marks * negativeMarkPercentage / 100);
+        }
+
+        // Update the submission with calculated score
+        await pool.execute(
+          `UPDATE user_question_submissions SET is_correct = ?, score = ? WHERE id = ?`,
+          [isCorrect, score, sub.id]
+        );
+      } catch (e) {
+        console.error('Error calculating MCQ score:', e);
+      }
+    }
+
     // Get segment progress
     const [segments] = await pool.execute(
       `SELECT asp.*, aseg.name as segment_name
@@ -837,47 +900,30 @@ class AssessmentUserMapping {
     const segmentScores = {};
 
     for (const segment of segments) {
-      // Get programming submissions for this segment
-      const [progSubmissions] = await pool.execute(
-        `SELECT ps.*, uqa.weightage
-         FROM programming_submissions ps
-         JOIN user_question_assignments uqa ON ps.programming_question_id = uqa.question_id 
-           AND uqa.assessment_user_mapping_id = ? 
+      // Get all submissions from user_question_submissions table
+      const [submissions] = await pool.execute(
+        `SELECT uqs.*, uqa.weightage, uqa.question_type
+         FROM user_question_submissions uqs
+         JOIN user_question_assignments uqa ON uqs.question_id = uqa.question_id 
+           AND uqa.assessment_user_mapping_id = uqs.assessment_user_mapping_id
+           AND uqa.question_type = uqs.question_type
            AND uqa.assessment_segment_id = ?
-           AND uqa.question_type = 'PROGRAMMING'
-         WHERE ps.assessment_user_mapping_id = ? AND ps.assessment_segment_id = ?`,
-        [mapping_id, segment.assessment_segment_id, mapping_id, segment.assessment_segment_id]
-      );
-
-      // Get MCQ submissions for this segment
-      const [mcqSubmissions] = await pool.execute(
-        `SELECT ms.*, uqa.weightage
-         FROM mcq_submissions ms
-         JOIN user_question_assignments uqa ON ms.mcq_question_id = uqa.question_id 
-           AND uqa.assessment_user_mapping_id = ? 
-           AND uqa.assessment_segment_id = ?
-           AND uqa.question_type = 'MCQ'
-         WHERE ms.assessment_user_mapping_id = ? AND ms.assessment_segment_id = ?`,
-        [mapping_id, segment.assessment_segment_id, mapping_id, segment.assessment_segment_id]
+         WHERE uqs.assessment_user_mapping_id = ?`,
+        [segment.assessment_segment_id, mapping_id]
       );
 
       let segmentScore = 0;
 
-      // Calculate programming scores (based on test cases)
-      for (const sub of progSubmissions) {
-        if (sub.is_correct) {
-          segmentScore += sub.weightage;
-        } else if (negativeMarkingEnabled && sub.attempted) {
-          segmentScore -= (sub.weightage * negativeMarkPercentage / 100);
-        }
-      }
-
-      // Calculate MCQ scores
-      for (const sub of mcqSubmissions) {
-        if (sub.is_correct) {
-          segmentScore += sub.weightage;
-        } else if (negativeMarkingEnabled && sub.selected_options) {
-          segmentScore -= (sub.weightage * negativeMarkPercentage / 100);
+      for (const sub of submissions) {
+        // If score is already calculated (e.g., MCQ on save, Programming on submit)
+        if (sub.score !== null && sub.score !== undefined) {
+          segmentScore += parseFloat(sub.score);
+        } else if (sub.is_correct === true || sub.is_correct === 1) {
+          // Fallback: use weightage if correct
+          segmentScore += sub.weightage || 0;
+        } else if (negativeMarkingEnabled && sub.answer_data && sub.is_correct === false) {
+          // Apply negative marking for wrong answers
+          segmentScore -= ((sub.weightage || 0) * negativeMarkPercentage / 100);
         }
       }
 

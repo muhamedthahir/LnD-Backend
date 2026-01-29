@@ -1029,6 +1029,15 @@ const getAssessmentTake = async (req, res) => {
           [currentSegment.id, assignment.question_id]
         );
         if (pqRows[0]) {
+          // Fetch test cases for this programming question (only non-hidden for display)
+          const [testCaseRows] = await pool.execute(
+            `SELECT id, input, expected_output, description, is_sample, is_hidden, points
+             FROM test_cases 
+             WHERE programming_question_id = ? AND (is_hidden = 0 OR is_sample = 1)
+             ORDER BY is_sample DESC, id ASC`,
+            [pqRows[0].id]
+          );
+          
           questions.push({
             ...pqRows[0],
             question_type: 'PROGRAMMING',
@@ -1038,7 +1047,15 @@ const getAssessmentTake = async (req, res) => {
             weightage: assignment.weightage,
             positive_marks: pqRows[0].positive_marks || pqRows[0].points || 0,
             negative_marks: pqRows[0].negative_marks || 0,
-            neutral_marks: pqRows[0].neutral_marks || 0
+            neutral_marks: pqRows[0].neutral_marks || 0,
+            test_cases: testCaseRows.map(tc => ({
+              id: tc.id,
+              input: tc.input,
+              expected_output: tc.expected_output,
+              description: tc.description,
+              is_sample: tc.is_sample,
+              points: tc.points
+            }))
           });
         }
       } else if (assignment.question_type === 'MCQ') {
@@ -1336,6 +1353,7 @@ const getAssessmentResult = async (req, res) => {
 
 /**
  * Save answer (auto-save individual answer)
+ * For MCQ, also calculates if answer is correct
  */
 const saveAnswer = async (req, res) => {
   try {
@@ -1355,12 +1373,67 @@ const saveAnswer = async (req, res) => {
       return res.status(400).json({ error: 'Assessment is not in progress' });
     }
 
+    let isCorrect = null;
+    let score = null;
+
+    // For MCQ, calculate if the answer is correct
+    if (question_type === 'MCQ' && answer) {
+      // Get correct options for this MCQ
+      const [correctOptions] = await pool.execute(
+        `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
+        [question_id]
+      );
+      const correctIds = correctOptions.map(o => o.id).sort((a, b) => a - b);
+      
+      // Get selected options from answer (could be array or single value)
+      let selectedIds = [];
+      if (Array.isArray(answer)) {
+        selectedIds = answer.map(id => parseInt(id)).filter(id => !isNaN(id)).sort((a, b) => a - b);
+      } else if (answer.selected_options) {
+        selectedIds = answer.selected_options.map(id => parseInt(id)).filter(id => !isNaN(id)).sort((a, b) => a - b);
+      } else if (typeof answer === 'number' || typeof answer === 'string') {
+        const parsed = parseInt(answer);
+        if (!isNaN(parsed)) selectedIds = [parsed];
+      }
+
+      // Check if selected matches correct
+      isCorrect = correctIds.length === selectedIds.length && 
+                  correctIds.every((id, idx) => id === selectedIds[idx]);
+
+      // Get question marks/weightage
+      const [questionInfo] = await pool.execute(
+        `SELECT q.points, smq.positive_marks, smq.negative_marks
+         FROM mcq_multiselect_questions mq
+         JOIN questions q ON mq.question_id = q.id
+         LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id
+         WHERE mq.id = ?
+         LIMIT 1`,
+        [question_id]
+      );
+      
+      const marks = questionInfo[0]?.positive_marks || questionInfo[0]?.points || 1;
+      const negativeMarks = questionInfo[0]?.negative_marks || 0;
+
+      // Calculate score
+      if (isCorrect) {
+        score = marks;
+      } else if (selectedIds.length > 0) {
+        // Wrong answer - apply negative marking if enabled
+        score = -negativeMarks;
+      } else {
+        // Unanswered
+        score = 0;
+      }
+    }
+
     // Save or update the answer in user_question_submissions
     await UserQuestionAssignment.saveAnswer({
       assessment_user_mapping_id: mapping_id,
       question_id,
       question_type,
-      answer
+      answer,
+      is_correct: isCorrect,
+      score
     });
 
     // Update segment progress
@@ -1374,7 +1447,11 @@ const saveAnswer = async (req, res) => {
     // Update mapping last activity
     await AssessmentUserMapping.updateActivity(mapping_id, {});
 
-    res.json({ message: 'Answer saved' });
+    res.json({ 
+      message: 'Answer saved',
+      is_correct: isCorrect,
+      score
+    });
   } catch (error) {
     console.error('Error saving answer:', error);
     res.status(500).json({ error: 'Failed to save answer' });
@@ -1426,6 +1503,7 @@ const saveProgress = async (req, res) => {
 
 /**
  * Submit code (programming question submission)
+ * Runs all test cases including hidden ones and calculates score
  */
 const submitCode = async (req, res) => {
   try {
@@ -1445,12 +1523,108 @@ const submitCode = async (req, res) => {
       return res.status(400).json({ error: 'Assessment is not in progress' });
     }
 
-    // Save the code submission
+    // Get all test cases for this question (including hidden)
+    const [allTestCases] = await pool.execute(
+      `SELECT id, input, expected_output, is_hidden, is_sample, points 
+       FROM test_cases 
+       WHERE programming_question_id = ?
+       ORDER BY is_sample DESC, id ASC`,
+      [question_id]
+    );
+
+    // Run code against all test cases
+    const pistonUrl = process.env.PISTON_URL || 'http://localhost';
+    const pistonPort = process.env.PISTON_PORT || '2000';
+    const pistonEndpoint = `${pistonUrl}:${pistonPort}/api/v2/execute`;
+
+    const languageVersions = {
+      'node': '18.15.0',
+      'javascript': '18.15.0',
+      'python': '3.10.0',
+      'java': '15.0.2',
+      'c': '10.2.0',
+      'cpp': '10.2.0',
+      'c++': '10.2.0'
+    };
+
+    let testCasesPassed = 0;
+    let totalTestCases = allTestCases.length;
+    let totalPoints = 0;
+    let earnedPoints = 0;
+    const testResults = [];
+
+    for (const testCase of allTestCases) {
+      totalPoints += testCase.points || 1;
+      
+      try {
+        const pistonPayload = {
+          language: language.toLowerCase(),
+          version: languageVersions[language.toLowerCase()] || '*',
+          files: [{ name: `main.${language === 'python' ? 'py' : language === 'java' ? 'java' : language}`, content: code }],
+          stdin: testCase.input || '',
+          args: [],
+          compile_timeout: 10000,
+          run_timeout: 10000
+        };
+
+        const response = await fetch(pistonEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pistonPayload)
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          const actualOutput = (result.run?.stdout || '').trim();
+          const expectedOutput = (testCase.expected_output || '').trim();
+          const passed = actualOutput === expectedOutput;
+
+          if (passed) {
+            testCasesPassed++;
+            earnedPoints += testCase.points || 1;
+          }
+
+          testResults.push({
+            test_case_id: testCase.id,
+            is_hidden: testCase.is_hidden,
+            passed,
+            // Only include details for non-hidden test cases
+            ...(testCase.is_hidden ? {} : {
+              input: testCase.input,
+              expected_output: testCase.expected_output,
+              actual_output: actualOutput
+            })
+          });
+        } else {
+          testResults.push({
+            test_case_id: testCase.id,
+            is_hidden: testCase.is_hidden,
+            passed: false,
+            error: 'Execution failed'
+          });
+        }
+      } catch (execError) {
+        console.error('Test case execution error:', execError);
+        testResults.push({
+          test_case_id: testCase.id,
+          is_hidden: testCase.is_hidden,
+          passed: false,
+          error: execError.message
+        });
+      }
+    }
+
+    const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+
+    // Save the code submission with results
     const result = await UserQuestionAssignment.submitCode({
       assessment_user_mapping_id: mapping_id,
       question_id,
       code,
-      language
+      language,
+      test_cases_passed: testCasesPassed,
+      test_cases_total: totalTestCases,
+      score
     });
 
     // Also save as answer for consistency
@@ -1458,7 +1632,7 @@ const submitCode = async (req, res) => {
       assessment_user_mapping_id: mapping_id,
       question_id,
       question_type: 'PROGRAMMING',
-      answer: { code, language }
+      answer: { code, language, test_cases_passed: testCasesPassed, test_cases_total: totalTestCases, score }
     });
 
     // Update segment progress
@@ -1474,7 +1648,19 @@ const submitCode = async (req, res) => {
 
     res.json({ 
       message: 'Code submitted successfully',
-      submission_id: result?.id
+      submission_id: result?.id,
+      test_cases_passed: testCasesPassed,
+      test_cases_total: totalTestCases,
+      score,
+      // Return visible test case results (not hidden ones' details)
+      results: testResults.filter(r => !r.is_hidden).map(r => ({
+        passed: r.passed,
+        input: r.input,
+        expected_output: r.expected_output,
+        actual_output: r.actual_output
+      })),
+      hidden_passed: testResults.filter(r => r.is_hidden && r.passed).length,
+      hidden_total: testResults.filter(r => r.is_hidden).length
     });
   } catch (error) {
     console.error('Error submitting code:', error);
@@ -1617,10 +1803,13 @@ const getSegmentQuestions = async (segmentId, mappingId) => {
     q.options = options;
   }
 
-  // Get test cases for programming questions (non-hidden only for display)
+  // Get test cases for programming questions (only non-hidden/sample for display)
   for (const q of progQuestions) {
     const [testCases] = await pool.execute(
-      'SELECT id, input, expected_output, description, is_hidden FROM test_cases WHERE programming_question_id = ?',
+      `SELECT id, input, expected_output, description, is_sample, points 
+       FROM test_cases 
+       WHERE programming_question_id = ? AND (is_hidden = 0 OR is_sample = 1)
+       ORDER BY is_sample DESC, id ASC`,
       [q.id]
     );
     q.test_cases = testCases;
