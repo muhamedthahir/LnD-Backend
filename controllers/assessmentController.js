@@ -1416,12 +1416,12 @@ const saveAnswer = async (req, res) => {
       const marks = questionInfo[0]?.positive_marks || questionInfo[0]?.points || 1;
       const negativeMarks = questionInfo[0]?.negative_marks || 0;
 
-      // Calculate score
+      // Calculate score (normalized to 1)
       if (isCorrect) {
-        score = marks;
+        score = 1; // Correct answer gives 1 point
       } else if (selectedIds.length > 0) {
         // Wrong answer - apply negative marking if enabled
-        score = -negativeMarks;
+        score = - (negativeMarks / marks); // Normalize negative marks too
       } else {
         // Unanswered
         score = 0;
@@ -1451,8 +1451,8 @@ const saveAnswer = async (req, res) => {
         selected_options: Array.isArray(answer) ? answer : (answer?.selected_options || [answer]),
         correct_options: correctOptions,
         is_correct: isCorrect,
-        score: score || 0,
-        max_score: 100
+        score: score || 0, // Score is 0 to 1
+        max_score: 1
       });
     }
 
@@ -1669,7 +1669,8 @@ const submitCode = async (req, res) => {
       }
     }
 
-    const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+    const percentageScore = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+    const normalizedScore = totalPoints > 0 ? (earnedPoints / totalPoints) : 0; // Score between 0 and 1
 
     // Get segment_id from segment_index
     const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(mapping_id, mapping.current_segment_index);
@@ -1685,8 +1686,8 @@ const submitCode = async (req, res) => {
       status: testCasesPassed === totalTestCases ? 'passed' : 'failed',
       test_cases_passed: testCasesPassed,
       test_cases_total: totalTestCases,
-      score: earnedPoints,  // Use earned points as the actual score
-      max_score: totalPoints,
+      score: normalizedScore,  // Store normalized score 0 to 1
+      max_score: 1,
       execution_result: testResults
     });
 
@@ -1715,7 +1716,7 @@ const submitCode = async (req, res) => {
       submission_id: result?.id,
       test_cases_passed: testCasesPassed,
       test_cases_total: totalTestCases,
-      score,
+      score: percentageScore, // Return percentage to UI
       earned_points: earnedPoints,
       total_points: totalPoints,
       segment_score: segmentScore,

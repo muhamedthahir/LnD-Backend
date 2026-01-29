@@ -527,7 +527,7 @@ class AssessmentUserMapping {
               `INSERT IGNORE INTO user_question_assignments 
                (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
                VALUES (?, ?, 'PROGRAMMING', ?, ?, ?, ?)`,
-              [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
+              [mapping_id, segment.id, q.question_id, q.sequence_order, 1, q.is_from_random_fetch] // Force weightage to 1
             );
           } catch (error) {
             console.error(`Error inserting programming question ${q.question_id} for segment ${segment.id}:`, error);
@@ -540,7 +540,7 @@ class AssessmentUserMapping {
               `INSERT IGNORE INTO user_question_assignments 
                (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
                VALUES (?, ?, 'MCQ', ?, ?, ?, ?)`,
-              [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
+              [mapping_id, segment.id, q.question_id, q.sequence_order, 1, q.is_from_random_fetch] // Force weightage to 1
             );
           } catch (error) {
             console.error(`Error inserting MCQ question ${q.question_id} for segment ${segment.id}:`, error);
