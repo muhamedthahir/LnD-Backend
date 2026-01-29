@@ -1031,10 +1031,10 @@ const getAssessmentTake = async (req, res) => {
         if (pqRows[0]) {
           // Fetch test cases for this programming question (only non-hidden for display)
           const [testCaseRows] = await pool.execute(
-            `SELECT id, input, expected_output, description, is_sample, is_hidden, points
+            `SELECT id, input, expected_result, description, is_hidden, weight
              FROM test_cases 
-             WHERE programming_question_id = ? AND (is_hidden = 0 OR is_sample = 1)
-             ORDER BY is_sample DESC, id ASC`,
+             WHERE programming_question_id = ? AND is_hidden = 0
+             ORDER BY \`order\` ASC, id ASC`,
             [pqRows[0].id]
           );
           
@@ -1051,10 +1051,10 @@ const getAssessmentTake = async (req, res) => {
             test_cases: testCaseRows.map(tc => ({
               id: tc.id,
               input: tc.input,
-              expected_output: tc.expected_output,
+              expected_output: tc.expected_result,
               description: tc.description,
-              is_sample: tc.is_sample,
-              points: tc.points
+              is_hidden: tc.is_hidden,
+              points: tc.weight
             }))
           });
         }
@@ -1525,10 +1525,10 @@ const submitCode = async (req, res) => {
 
     // Get all test cases for this question (including hidden)
     const [allTestCases] = await pool.execute(
-      `SELECT id, input, expected_output, is_hidden, is_sample, points 
+      `SELECT id, input, expected_result, is_hidden, weight 
        FROM test_cases 
        WHERE programming_question_id = ?
-       ORDER BY is_sample DESC, id ASC`,
+       ORDER BY \`order\` ASC, id ASC`,
       [question_id]
     );
 
@@ -1554,7 +1554,7 @@ const submitCode = async (req, res) => {
     const testResults = [];
 
     for (const testCase of allTestCases) {
-      totalPoints += testCase.points || 1;
+      totalPoints += testCase.weight || 1;
       
       try {
         const pistonPayload = {
@@ -1576,12 +1576,12 @@ const submitCode = async (req, res) => {
         if (response.ok) {
           const result = await response.json();
           const actualOutput = (result.run?.stdout || '').trim();
-          const expectedOutput = (testCase.expected_output || '').trim();
+          const expectedOutput = (testCase.expected_result || '').trim();
           const passed = actualOutput === expectedOutput;
 
           if (passed) {
             testCasesPassed++;
-            earnedPoints += testCase.points || 1;
+            earnedPoints += testCase.weight || 1;
           }
 
           testResults.push({
@@ -1591,7 +1591,7 @@ const submitCode = async (req, res) => {
             // Only include details for non-hidden test cases
             ...(testCase.is_hidden ? {} : {
               input: testCase.input,
-              expected_output: testCase.expected_output,
+              expected_result: testCase.expected_result,
               actual_output: actualOutput
             })
           });
@@ -1656,7 +1656,7 @@ const submitCode = async (req, res) => {
       results: testResults.filter(r => !r.is_hidden).map(r => ({
         passed: r.passed,
         input: r.input,
-        expected_output: r.expected_output,
+        expected_result: r.expected_result,
         actual_output: r.actual_output
       })),
       hidden_passed: testResults.filter(r => r.is_hidden && r.passed).length,
@@ -1803,16 +1803,22 @@ const getSegmentQuestions = async (segmentId, mappingId) => {
     q.options = options;
   }
 
-  // Get test cases for programming questions (only non-hidden/sample for display)
+  // Get test cases for programming questions (only non-hidden for display)
   for (const q of progQuestions) {
     const [testCases] = await pool.execute(
-      `SELECT id, input, expected_output, description, is_sample, points 
+      `SELECT id, input, expected_result, description, is_hidden, weight 
        FROM test_cases 
-       WHERE programming_question_id = ? AND (is_hidden = 0 OR is_sample = 1)
-       ORDER BY is_sample DESC, id ASC`,
+       WHERE programming_question_id = ? AND is_hidden = 0
+       ORDER BY \`order\` ASC, id ASC`,
       [q.id]
     );
-    q.test_cases = testCases;
+    q.test_cases = testCases.map(tc => ({
+      id: tc.id,
+      input: tc.input,
+      expected_output: tc.expected_result,
+      description: tc.description,
+      points: tc.weight
+    }));
   }
 
   // Combine and sort questions

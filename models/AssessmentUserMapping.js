@@ -368,6 +368,17 @@ class AssessmentUserMapping {
     // Check if this is a re-attempt (already has an attempt)
     const isReAttempt = mapping.assessment_started_time !== null;
 
+    // Ensure required columns exist (for production compatibility)
+    try {
+      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN time_remaining INT DEFAULT 0`);
+    } catch (e) { /* Column may already exist */ }
+    try {
+      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN segment_time_remaining INT DEFAULT 0`);
+    } catch (e) { /* Column may already exist */ }
+    try {
+      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN attempt_count INT DEFAULT 1`);
+    } catch (e) { /* Column may already exist */ }
+
     await pool.execute(
       `UPDATE assessment_user_mappings SET
          status = 'IN_PROGRESS',
