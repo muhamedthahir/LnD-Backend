@@ -938,6 +938,220 @@ class AdministrationController {
     }
   }
   /**
+   * Get overall report for an administration (practice segments only)
+   * Columns: rank, name, email, status, college, group, degree, department, class, section,
+   * segment summary (total, in_progress, completed, completion %), segment-wise %, question-wise %
+   */
+  static async getOverallReport(req, res) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only view reports from your institution' });
+      }
+
+      const courseId = administration.course_id;
+
+      // Enrolled users with user details
+      const [enrolledRows] = await pool.execute(
+        `SELECT 
+          e.student_id as user_id,
+          u.name as user_name,
+          u.email as user_email,
+          u.roll_number,
+          u.department,
+          u.college_name,
+          u.section,
+          u.degree,
+          e.status as enrollment_status
+        FROM enrollments e
+        JOIN users u ON e.student_id = u.id
+        WHERE e.administration_id = ? AND e.status != 'Expired'
+        ORDER BY u.name ASC`,
+        [id]
+      );
+
+      const groupByUser = {};
+      if (enrolledRows.length > 0) {
+        const [groupRows] = await pool.execute(
+          `SELECT gm.user_id, g.name as group_name, g.degree as group_degree, g.department as group_department, g.passout_year
+           FROM group_members gm
+           JOIN \`groups\` g ON g.id = gm.group_id
+           WHERE gm.user_id IN (${enrolledRows.map(() => '?').join(',')})`,
+          enrolledRows.map(r => r.user_id)
+        );
+        groupRows.forEach(gr => {
+          if (!groupByUser[gr.user_id]) groupByUser[gr.user_id] = gr;
+        });
+      }
+
+      // Practice segments for this course (only practice, not lesson/assessment)
+      const [practiceSegments] = await pool.execute(
+        `SELECT ps.id, ps.name, ps.topic_id, t.order_index as topic_order
+         FROM practice_segments ps
+         JOIN topics t ON t.id = ps.topic_id
+         WHERE t.course_id = ?
+         ORDER BY t.order_index, ps.id`,
+        [courseId]
+      );
+
+      if (practiceSegments.length === 0) {
+        const rows = enrolledRows.map((u, idx) => ({
+          rank: idx + 1,
+          name: u.user_name,
+          email: u.user_email,
+          status: u.enrollment_status || '',
+          college: u.college_name || '',
+          group: (groupByUser[u.user_id] || {}).group_name || '',
+          degree: u.degree || (groupByUser[u.user_id] || {}).group_degree || '',
+          department: u.department || (groupByUser[u.user_id] || {}).group_department || '',
+          class: (groupByUser[u.user_id] || {}).passout_year != null ? String((groupByUser[u.user_id] || {}).passout_year) : '',
+          section: u.section || '',
+          totalSegments: 0,
+          inProgressSegments: 0,
+          completedSegments: 0,
+          completionPct: 0,
+          segmentPcts: {},
+          questionPcts: {}
+        }));
+        return res.json({
+          meta: { segmentHeaders: [], questionHeaders: [] },
+          rows
+        });
+      }
+
+      const segmentIds = practiceSegments.map(s => s.id);
+
+      // User segment progress (practice only)
+      const [segmentProgressRows] = await pool.execute(
+        `SELECT user_id, practice_segment_id, status, progress_percentage, items_completed, items_total
+         FROM user_segment_progress
+         WHERE course_id = ? AND practice_segment_id IS NOT NULL AND practice_segment_id IN (${segmentIds.map(() => '?').join(',')})`,
+        [courseId, ...segmentIds]
+      );
+      const progressByUser = {};
+      segmentProgressRows.forEach(sp => {
+        if (!progressByUser[sp.user_id]) progressByUser[sp.user_id] = {};
+        progressByUser[sp.user_id][sp.practice_segment_id] = sp;
+      });
+
+      // Programming submissions (user_id, practice_segment_id, question_id = programming_question_id, completed)
+      const [progSubs] = await pool.execute(
+        `SELECT ps.user_id, ps.practice_segment_id, ps.programming_question_id as question_id,
+                ps.successful_submission, ps.best_score, ps.max_score
+         FROM programming_submissions ps
+         WHERE ps.user_id IN (${enrolledRows.map(() => '?').join(',')}) AND ps.practice_segment_id IN (${segmentIds.map(() => '?').join(',')})`,
+        [...enrolledRows.map(r => r.user_id), ...segmentIds]
+      );
+      const progByUser = {};
+      progSubs.forEach(p => {
+        const key = `${p.user_id}_${p.practice_segment_id}_${p.question_id}`;
+        const pct = p.max_score > 0 ? Math.round((Number(p.best_score) / Number(p.max_score)) * 100) : (p.successful_submission ? 100 : 0);
+        progByUser[key] = Math.min(100, pct);
+      });
+
+      // MCQ submissions (user_id, practice_segment_id, mcq_question_id = question_id, is_correct, score)
+      const [mcqSubs] = await pool.execute(
+        `SELECT ms.user_id, ms.practice_segment_id, ms.mcq_question_id as question_id,
+                ms.is_correct, ms.best_score, ms.max_score
+         FROM mcq_submissions ms
+         WHERE ms.user_id IN (${enrolledRows.map(() => '?').join(',')}) AND ms.practice_segment_id IN (${segmentIds.map(() => '?').join(',')})`,
+        [...enrolledRows.map(r => r.user_id), ...segmentIds]
+      );
+      const mcqByUser = {};
+      mcqSubs.forEach(m => {
+        const key = `${m.user_id}_${m.practice_segment_id}_${m.question_id}`;
+        const pct = m.max_score > 0 ? Math.round((Number(m.best_score) / Number(m.max_score)) * 100) : (m.is_correct ? 100 : 0);
+        mcqByUser[key] = Math.min(100, pct);
+      });
+
+      // Question headers: all questions per practice segment (programming + mcq)
+      const questionHeaders = [];
+      const segmentHeaders = practiceSegments.map(seg => ({ id: seg.id, name: seg.name }));
+
+      for (const seg of practiceSegments) {
+        const [progQ] = await pool.execute(
+          `SELECT q.id, q.name FROM practice_segment_programming_questions pspq
+           JOIN questions q ON q.id = pspq.question_id
+           WHERE pspq.practice_segment_id = ? ORDER BY pspq.order_index`,
+          [seg.id]
+        );
+        const [mcqQ] = await pool.execute(
+          `SELECT q.id, q.name FROM practice_segment_mcq_questions psmq
+           JOIN questions q ON q.id = psmq.question_id
+           WHERE psmq.practice_segment_id = ? ORDER BY psmq.order_index`,
+          [seg.id]
+        );
+        const allQs = [...progQ.map(q => ({ id: q.id, name: q.name, segmentId: seg.id, segmentName: seg.name })), ...mcqQ.map(q => ({ id: q.id, name: q.name, segmentId: seg.id, segmentName: seg.name }))];
+        allQs.forEach(q => questionHeaders.push({ questionId: q.id, questionName: q.name, segmentId: q.segmentId, segmentName: q.segmentName }));
+      }
+
+      const rows = enrolledRows.map((u, idx) => {
+        const userProgress = progressByUser[u.user_id] || {};
+        let totalSegments = practiceSegments.length;
+        let inProgress = 0;
+        let completed = 0;
+        const segmentPcts = {};
+        const questionPcts = {};
+
+        practiceSegments.forEach(seg => {
+          const sp = userProgress[seg.id];
+          const pct = sp ? (sp.progress_percentage != null ? Number(sp.progress_percentage) : 0) : 0;
+          segmentPcts[seg.id] = pct;
+          if (sp) {
+            if (sp.status === 'completed') completed++;
+            else if (sp.status === 'in_progress') inProgress++;
+          }
+        });
+
+        const completionPct = totalSegments > 0 ? Math.round((completed / totalSegments) * 100) : 0;
+
+        questionHeaders.forEach(qh => {
+          const key = `${u.user_id}_${qh.segmentId}_${qh.questionId}`;
+          const pct = progByUser[key] != null ? progByUser[key] : (mcqByUser[key] != null ? mcqByUser[key] : 0);
+          questionPcts[`${qh.segmentId}_${qh.questionId}`] = pct;
+        });
+
+        const grp = groupByUser[u.user_id] || {};
+        return {
+          rank: idx + 1,
+          name: u.user_name || '',
+          email: u.user_email || '',
+          status: u.enrollment_status || '',
+          college: u.college_name || '',
+          group: grp.group_name || '',
+          degree: u.degree || grp.group_degree || '',
+          department: u.department || grp.group_department || '',
+          class: grp.passout_year != null ? String(grp.passout_year) : '',
+          section: u.section || '',
+          totalSegments,
+          inProgressSegments: inProgress,
+          completedSegments: completed,
+          completionPct,
+          segmentPcts,
+          questionPcts
+        };
+      });
+
+      res.json({
+        meta: {
+          segmentHeaders,
+          questionHeaders
+        },
+        rows
+      });
+    } catch (error) {
+      console.error('Get overall report error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  }
+
+  /**
    * Force expire a course for a specific user in an administration
    */
   static async forceExpireUser(req, res) {

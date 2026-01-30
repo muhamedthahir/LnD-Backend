@@ -8,6 +8,7 @@ router.post('/', authenticate, authorize('college_admin', 'primary_admin'), Admi
 router.get('/', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getAll);
 router.get('/:id', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getById);
 router.get('/:id/enrolled-users', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getEnrolledUsers);
+router.get('/:id/overall-report', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getOverallReport);
 router.get('/:id/users/:userId/progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getUserProgressReport);
 router.post('/:id/update-progress', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.updateAllUsersProgress);
 router.get('/:id/progress-history', authenticate, authorize('college_admin', 'primary_admin'), AdministrationController.getProgressUpdateHistory);
