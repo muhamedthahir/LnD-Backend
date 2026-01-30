@@ -1151,7 +1151,7 @@ class ProctoringLog {
     );
     return rows.map(row => ({
       ...row,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null
+      metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata
     }));
   }
 }

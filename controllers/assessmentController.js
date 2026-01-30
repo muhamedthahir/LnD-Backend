@@ -1364,7 +1364,8 @@ const getAssessmentResult = async (req, res) => {
           language_used: submission?.language_used,
           test_cases_passed: submission?.test_cases_passed,
           test_cases_total: submission?.test_cases_total,
-          user_answer: submission?.last_selected_options ? JSON.parse(submission.last_selected_options).join(', ') : null,
+          user_answer: submission?.last_selected_options ? 
+            (typeof submission.last_selected_options === 'string' ? JSON.parse(submission.last_selected_options) : submission.last_selected_options).join(', ') : null,
           score: submission?.score || 0
         };
       }));
