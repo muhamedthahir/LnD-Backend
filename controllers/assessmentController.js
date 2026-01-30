@@ -1327,23 +1327,57 @@ const getAssessmentResult = async (req, res) => {
       return res.status(404).json({ error: 'Assessment not found' });
     }
 
-    // Verify user or admin
-    if (mapping.user_id !== req.user.id && req.user.role !== 'admin') {
+    // Verify user or admin (primary_admin, college_admin, or generic admin)
+    const isAdmin = ['primary_admin', 'college_admin', 'admin'].includes(req.user.role);
+    
+    if (mapping.user_id !== req.user.id && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     // Get scoring config to check if results should be shown
     const scoringConfig = await ScoringConfig.findByAdminId(mapping.assessment_administrator_id);
-    if (!scoringConfig?.show_score_at_end && req.user.role !== 'admin') {
+    if (!scoringConfig?.show_score_at_end && !isAdmin) {
       return res.status(403).json({ error: 'Results are not available' });
     }
 
     const segmentProgress = await AssessmentSegmentProgress.getByMappingId(mapping_id);
     const proctoringLogs = await ProctoringLog.getByMappingId(mapping_id);
 
+    // Enhance segment progress with detailed question data
+    const detailedSegmentProgress = await Promise.all(segmentProgress.map(async (segment) => {
+      // Get questions assigned to this user for this segment
+      const questions = await UserQuestionAssignment.getByMappingAndSegment(mapping_id, segment.assessment_segment_id);
+      
+      // Get submissions for these questions
+      const enhancedQuestions = await Promise.all(questions.map(async (q) => {
+        let submission = null;
+        if (q.question_type === 'PROGRAMMING') {
+          submission = await ProgrammingSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+        } else {
+          submission = await MCQSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+        }
+
+        return {
+          ...q,
+          is_attempted: !!submission,
+          submitted_code: submission?.submitted_code,
+          language_used: submission?.language_used,
+          test_cases_passed: submission?.test_cases_passed,
+          test_cases_total: submission?.test_cases_total,
+          user_answer: submission?.last_selected_options ? JSON.parse(submission.last_selected_options).join(', ') : null,
+          score: submission?.score || 0
+        };
+      }));
+
+      return {
+        ...segment,
+        questions: enhancedQuestions
+      };
+    }));
+
     res.json({
       mapping,
-      segment_progress: segmentProgress,
+      segment_progress: detailedSegmentProgress,
       proctoring_logs: proctoringLogs,
       show_correct_answers: scoringConfig?.show_correct_answers_after || false
     });

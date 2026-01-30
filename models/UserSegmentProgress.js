@@ -36,14 +36,20 @@ class UserSegmentProgress {
       let completed_at = existing.completed_at;
       let started_at = existing.started_at;
       
-      if (progress_percentage >= 100 && existing.status !== 'completed') {
+      // Use best progress logic
+      const currentProgress = existing.progress_percentage || 0;
+      const bestProgress = Math.max(currentProgress, progress_percentage);
+      
+      if (bestProgress >= 100 && existing.status !== 'completed') {
         newStatus = 'completed';
         completed_at = new Date();
-      } else if (progress_percentage > 0 && progress_percentage < 100) {
+      } else if (bestProgress > 0 && (existing.status === 'not_started' || !existing.status)) {
         newStatus = 'in_progress';
+      } else {
+        newStatus = existing.status || status;
       }
       
-      if (!started_at && progress_percentage > 0) {
+      if (!started_at && bestProgress > 0) {
         started_at = new Date();
       }
       
@@ -60,7 +66,7 @@ class UserSegmentProgress {
            completed_at = ?,
            last_updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [newStatus, progress_percentage, score, max_score, items_completed, items_total, 
+        [newStatus, bestProgress, score, max_score, items_completed, items_total, 
          time_spent_seconds, started_at, completed_at, existing.id]
       );
       
@@ -102,16 +108,19 @@ class UserSegmentProgress {
     const existing = await this.findByUserAndSegment(user_id, segment_id);
     
     if (existing) {
-      // Cap progress at 100%
-      const cappedProgress = Math.min(progress_percentage, 100);
+      // Use the best progress (don't allow it to decrease)
+      const currentProgress = existing.progress_percentage || 0;
+      const cappedNewProgress = Math.min(progress_percentage, 100);
+      const bestProgress = Math.max(currentProgress, cappedNewProgress);
       
       let status = existing.status;
       let completed_at = existing.completed_at;
       
-      if (cappedProgress >= 100) {
+      // Update status and completed_at if progress reaches 100% for the first time
+      if (bestProgress >= 100 && existing.status !== 'completed') {
         status = 'completed';
-        completed_at = completed_at || new Date();
-      } else if (cappedProgress > 0) {
+        completed_at = new Date();
+      } else if (bestProgress > 0 && status === 'not_started') {
         status = 'in_progress';
       }
       
@@ -126,7 +135,7 @@ class UserSegmentProgress {
            completed_at = ?,
            last_updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [status, cappedProgress, cappedProgress, time_spent_seconds, completed_at, existing.id]
+        [status, bestProgress, bestProgress, time_spent_seconds, completed_at, existing.id]
       );
     }
   }
@@ -135,13 +144,10 @@ class UserSegmentProgress {
    * Update progress for a practice segment (programming + MCQ)
    */
   static async updatePracticeSegmentProgress(user_id, practice_segment_id, programmingProgress, mcqProgress) {
-    const existing = await this.findByUserAndPracticeSegment(user_id, practice_segment_id);
-    
-    if (!existing) return;
+    let existing = await this.findByUserAndPracticeSegment(user_id, practice_segment_id);
     
     // Calculate combined progress
     const totalItems = (programmingProgress?.total || 0) + (mcqProgress?.total || 0);
-    // Cap completed items at total items to prevent >100% progress
     const completedItems = Math.min(
       (programmingProgress?.completed || 0) + (mcqProgress?.completed || 0),
       totalItems
@@ -149,16 +155,54 @@ class UserSegmentProgress {
     const totalScore = (programmingProgress?.score || 0) + (mcqProgress?.score || 0);
     const maxScore = (programmingProgress?.maxScore || 0) + (mcqProgress?.maxScore || 0);
     
-    // Calculate progress and cap at 100%
     const progress_percentage = totalItems > 0 ? Math.min(Math.round((completedItems / totalItems) * 100), 100) : 0;
     
+    if (!existing) {
+      // If no progress record exists, we need to find course_id and topic_id to create one
+      const [segmentInfo] = await pool.execute(
+        'SELECT topic_id FROM practice_segments WHERE id = ?',
+        [practice_segment_id]
+      );
+      
+      if (segmentInfo.length > 0) {
+        const topic_id = segmentInfo[0].topic_id;
+        const [topicInfo] = await pool.execute(
+          'SELECT course_id FROM topics WHERE id = ?',
+          [topic_id]
+        );
+        
+        if (topicInfo.length > 0) {
+          const course_id = topicInfo[0].course_id;
+          await this.createOrUpdate({
+            user_id,
+            course_id,
+            topic_id,
+            practice_segment_id,
+            segment_type: 'practice',
+            status: progress_percentage >= 100 ? 'completed' : (progress_percentage > 0 ? 'in_progress' : 'not_started'),
+            progress_percentage,
+            score: totalScore,
+            max_score: maxScore,
+            items_completed: completedItems,
+            items_total: totalItems
+          });
+          return;
+        }
+      }
+      return; // Could not find info to create record
+    }
+    
+    // Existing record found, update it
     let status = existing.status;
     let completed_at = existing.completed_at;
     
-    if (progress_percentage >= 100) {
+    // Use best progress logic
+    const bestProgress = Math.max(existing.progress_percentage || 0, progress_percentage);
+    
+    if (bestProgress >= 100 && existing.status !== 'completed') {
       status = 'completed';
-      completed_at = completed_at || new Date();
-    } else if (progress_percentage > 0) {
+      completed_at = new Date();
+    } else if (bestProgress > 0 && status === 'not_started') {
       status = 'in_progress';
     }
     
@@ -174,7 +218,7 @@ class UserSegmentProgress {
          completed_at = ?,
          last_updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [status, progress_percentage, totalScore, maxScore, completedItems, totalItems, completed_at, existing.id]
+      [status, bestProgress, totalScore, maxScore, completedItems, totalItems, completed_at, existing.id]
     );
   }
 
