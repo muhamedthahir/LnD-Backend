@@ -28,13 +28,13 @@ class UserCourseController {
         return res.status(403).json({ error: 'Your enrollment has expired. You no longer have access to this course.' });
       }
 
-      // Create or update user-course relationship
+      // Create or update user-course relationship. Preserve existing progress when resuming (do not reset to 0).
       const userCourseId = await UserCourse.createOrUpdate({
         user_id: userId,
         course_id: parseInt(courseId),
         enrollment_id: enrollment.id,
         status: 'in_progress',
-        progress_percentage: 0,
+        progress_percentage: userCourse != null ? userCourse.progress_percentage : 0,
         last_accessed_at: new Date()
       });
 
