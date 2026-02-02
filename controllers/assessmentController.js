@@ -1560,7 +1560,9 @@ const saveProgress = async (req, res) => {
       current_question_index,
       time_remaining,
       segment_time_remaining,
-      total_time_worked
+      total_time_worked,
+      segment_id,
+      time_spent
     });
 
     // Update segment progress if segment_id is provided or we can determine it
@@ -1582,6 +1584,40 @@ const saveProgress = async (req, res) => {
         current_question_index: current_question_index,
         status: 'IN_PROGRESS'
       });
+
+      // Mark the current question as 'attempted' if not already exists
+      const segments = await AssessmentSegment.getByAssessmentId(mapping.assessment_id);
+      const segment = segments.find(s => s.id === actualSegmentId);
+      
+      if (segment && current_question_index !== undefined) {
+        // We need to know which question it is. 
+        // In assessments, questions are assigned.
+        const [assignments] = await pool.execute(
+          `SELECT question_id, question_type FROM user_question_assignments 
+           WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ? 
+           ORDER BY sequence_order ASC`,
+          [mapping_id, actualSegmentId]
+        );
+
+        if (assignments && assignments[current_question_index]) {
+          const { question_id, question_type } = assignments[current_question_index];
+          if (question_type === 'PROGRAMMING') {
+            await ProgrammingSubmission.markAttemptedForAssessment({
+              user_id: req.user.id,
+              assessment_user_mapping_id: mapping_id,
+              assessment_segment_id: actualSegmentId,
+              programming_question_id: question_id
+            });
+          } else if (question_type === 'MCQ') {
+            await MCQSubmission.markAttemptedForAssessment({
+              user_id: req.user.id,
+              assessment_user_mapping_id: mapping_id,
+              assessment_segment_id: actualSegmentId,
+              mcq_question_id: question_id
+            });
+          }
+        }
+      }
     }
 
     res.json({ message: 'Progress saved' });

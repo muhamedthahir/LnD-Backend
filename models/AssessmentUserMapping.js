@@ -747,11 +747,6 @@ class AssessmentUserMapping {
       params.push(data.current_segment_index);
     }
 
-    if (data.current_question_index !== undefined) {
-      updates.push('current_question_index = ?');
-      params.push(data.current_question_index);
-    }
-
     if (data.time_remaining !== undefined) {
       updates.push('time_remaining = ?');
       params.push(data.time_remaining);
@@ -1025,10 +1020,7 @@ class AssessmentUserMapping {
       params.push(data.current_segment_index);
     }
 
-    if (data.current_question_index !== undefined) {
-      updates.push('current_question_index = ?');
-      params.push(data.current_question_index);
-    }
+    
 
     if (data.time_remaining !== undefined) {
       updates.push('time_remaining = ?');
@@ -1050,6 +1042,12 @@ class AssessmentUserMapping {
     await pool.execute(
       `UPDATE assessment_user_mappings SET ${updates.join(', ')} WHERE id = ?`,
       params
+    );
+    console.log('data', data)
+
+    await pool.execute(
+      `UPDATE assessment_segment_progress SET time_used = ? ,current_question_index = ? ,time_remaining = ? WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+      [data.time_spent, data.current_question_index, data.segment_time_remaining, id, data.segment_id]
     );
 
     return true;

@@ -29,6 +29,9 @@ router.post('/lesson/complete', SubmissionController.completeLesson);
 // Start a practice segment
 router.post('/practice/start', SubmissionController.startPractice);
 
+// Mark question as attempted
+router.post('/practice/attempt', SubmissionController.attemptQuestion);
+
 // =====================================================
 // PROGRAMMING SUBMISSION ROUTES
 // =====================================================

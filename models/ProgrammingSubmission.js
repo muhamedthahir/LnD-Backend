@@ -12,6 +12,14 @@ class ProgrammingSubmission {
       { name: 'execution_result', definition: 'JSON DEFAULT NULL' }
     ];
 
+    // Ensure status enum includes 'attempted'
+    try {
+      await pool.execute(`ALTER TABLE programming_submissions MODIFY COLUMN status ENUM('pending', 'running', 'completed', 'error', 'attempted') DEFAULT 'pending'`);
+      console.log("Updated status enum in programming_submissions");
+    } catch (e) {
+      console.error("Error updating status enum in programming_submissions:", e.message);
+    }
+
     for (const col of columnsToAdd) {
       try {
         await pool.execute(`ALTER TABLE programming_submissions ADD COLUMN ${col.name} ${col.definition}`);
@@ -147,6 +155,55 @@ class ProgrammingSubmission {
       [assessment_user_mapping_id, programming_question_id]
     );
     return rows[0] || null;
+  }
+
+  /**
+   * Mark a question as attempted (assessment)
+   */
+  static async markAttemptedForAssessment(data) {
+    const { user_id, assessment_user_mapping_id, assessment_segment_id, programming_question_id } = data;
+    
+    // Ensure assessment columns exist
+    await this.ensureAssessmentColumns();
+
+    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, programming_question_id);
+    if (existing) return existing.id;
+
+    const [result] = await pool.execute(
+      `INSERT INTO programming_submissions 
+       (user_id, programming_question_id, assessment_user_mapping_id, assessment_segment_id, status, submission_count)
+       VALUES (?, ?, ?, ?, 'attempted', 0)`,
+      [user_id, programming_question_id, assessment_user_mapping_id, assessment_segment_id]
+    );
+    return result.insertId;
+  }
+
+  /**
+   * Mark a question as attempted (practice segment)
+   */
+  static async markAttempted(data) {
+    const { user_id, course_id, practice_segment_id, programming_question_id } = data;
+
+    // Ensure status enum includes 'attempted'
+    await this.ensureAssessmentColumns();
+
+    const existing = await this.findByUserAndQuestion(user_id, programming_question_id);
+    if (existing) return existing.id;
+
+    // Create base submission first
+    const submissionId = await Submission.create({
+      user_id,
+      course_id,
+      submission_type: 'programming'
+    });
+
+    const [result] = await pool.execute(
+      `INSERT INTO programming_submissions 
+       (submission_id, user_id, programming_question_id, practice_segment_id, status, submission_count)
+       VALUES (?, ?, ?, ?, 'attempted', 0)`,
+      [submissionId, user_id, programming_question_id, practice_segment_id]
+    );
+    return result.insertId;
   }
 
   /**

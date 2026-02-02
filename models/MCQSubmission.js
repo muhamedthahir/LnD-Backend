@@ -11,6 +11,14 @@ class MCQSubmission {
       { name: 'assessment_segment_id', definition: 'INT DEFAULT NULL' }
     ];
 
+    // Ensure status enum includes 'attempted'
+    try {
+      await pool.execute(`ALTER TABLE mcq_submissions MODIFY COLUMN status ENUM('unanswered', 'answered', 'skipped', 'attempted') DEFAULT 'unanswered'`);
+      console.log("Updated status enum in mcq_submissions");
+    } catch (e) {
+      console.error("Error updating status enum in mcq_submissions:", e.message);
+    }
+
     for (const col of columnsToAdd) {
       try {
         await pool.execute(`ALTER TABLE mcq_submissions ADD COLUMN ${col.name} ${col.definition}`);
@@ -127,6 +135,55 @@ class MCQSubmission {
       [assessment_user_mapping_id, mcq_question_id]
     );
     return rows[0] || null;
+  }
+
+  /**
+   * Mark a question as attempted (assessment)
+   */
+  static async markAttemptedForAssessment(data) {
+    const { user_id, assessment_user_mapping_id, assessment_segment_id, mcq_question_id } = data;
+    
+    // Ensure assessment columns exist
+    await this.ensureAssessmentColumns();
+
+    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, mcq_question_id);
+    if (existing) return existing.id;
+
+    const [result] = await pool.execute(
+      `INSERT INTO mcq_submissions 
+       (user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id, status, attempt_count)
+       VALUES (?, ?, ?, ?, 'attempted', 0)`,
+      [user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id]
+    );
+    return result.insertId;
+  }
+
+  /**
+   * Mark a question as attempted (practice segment)
+   */
+  static async markAttempted(data) {
+    const { user_id, course_id, practice_segment_id, mcq_question_id } = data;
+
+    // Ensure status enum includes 'attempted'
+    await this.ensureAssessmentColumns();
+
+    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id);
+    if (existing) return existing.id;
+
+    // Create base submission first
+    const submissionId = await Submission.create({
+      user_id,
+      course_id,
+      submission_type: 'mcq'
+    });
+
+    const [result] = await pool.execute(
+      `INSERT INTO mcq_submissions 
+       (submission_id, user_id, mcq_question_id, practice_segment_id, status, attempt_count)
+       VALUES (?, ?, ?, ?, 'attempted', 0)`,
+      [submissionId, user_id, mcq_question_id, practice_segment_id]
+    );
+    return result.insertId;
   }
 
   /**
