@@ -34,6 +34,7 @@ class AssessmentUserMapping {
         ip_address VARCHAR(45) DEFAULT NULL,
         browser_info VARCHAR(500) DEFAULT NULL,
         tab_switch_count INT DEFAULT 0,
+        refresh_violation_count INT DEFAULT 1,
         feedback_rating INT DEFAULT NULL,
         feedback_comment TEXT DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -71,7 +72,8 @@ class AssessmentUserMapping {
       { name: 'time_remaining', definition: 'INT DEFAULT 0' },
       { name: 'segment_time_remaining', definition: 'INT DEFAULT 0' },
       { name: 'attempt_count', definition: 'INT DEFAULT 1' },
-      { name: 'total_time_worked', definition: 'INT DEFAULT 0' }
+      { name: 'total_time_worked', definition: 'INT DEFAULT 0' },
+      { name: 'refresh_violation_count', definition: 'INT DEFAULT 1' }
     ];
 
     for (const col of columnsToAdd) {
@@ -265,23 +267,39 @@ class AssessmentUserMapping {
   }
 
   /**
-   * Get user's assessments
+   * Get user's assessments (returns only the latest attempt per assessment with total attempts count)
    */
   static async getByUserId(user_id, { status, page = 1, pageSize = 10 }) {
     const offset = (page - 1) * pageSize;
+    
+    // First, get the latest attempt for each assessment_administrator_id
+    // Using a subquery to get max attempt_number per assessment_administrator
     let query = `
       SELECT aum.*,
              aum.id as user_mapping_id,
              aa.display_name as administrator_name,
              a.title as assessment_title, a.description as assessment_description,
-             tc.total_time, tc.start_date_time, tc.end_date_time
+             tc.total_time, tc.start_date_time, tc.end_date_time,
+             attempt_counts.total_attempts,
+             attempt_counts.max_attempt
       FROM assessment_user_mappings aum
       JOIN assessment_administrators aa ON aum.assessment_administrator_id = aa.id
       JOIN assessments a ON aa.assessment_id = a.id
       LEFT JOIN timing_configs tc ON aa.id = tc.assessment_administrator_id
-      WHERE aum.user_id = ? AND aa.status = 'ACTIVE'
+      JOIN (
+        SELECT assessment_administrator_id, user_id, 
+               COUNT(*) as total_attempts, 
+               MAX(attempt_number) as max_attempt
+        FROM assessment_user_mappings
+        WHERE user_id = ?
+        GROUP BY assessment_administrator_id, user_id
+      ) attempt_counts ON aum.assessment_administrator_id = attempt_counts.assessment_administrator_id 
+                       AND aum.user_id = attempt_counts.user_id
+      WHERE aum.user_id = ? 
+        AND aa.status = 'ACTIVE'
+        AND aum.attempt_number = attempt_counts.max_attempt
     `;
-    const params = [user_id];
+    const params = [user_id, user_id];
 
     if (status) {
       if (status === 'PENDING') {
@@ -292,9 +310,14 @@ class AssessmentUserMapping {
       }
     }
 
-    // Get total count
-    const countQuery = query.replace(/SELECT aum\.\*[\s\S]*?FROM assessment_user_mappings aum/, 'SELECT COUNT(*) as total FROM assessment_user_mappings aum');
-    const [countRows] = await pool.execute(countQuery, params);
+    // Get total count - count distinct assessments for this user
+    const countQuery = `
+      SELECT COUNT(DISTINCT aum.assessment_administrator_id) as total
+      FROM assessment_user_mappings aum
+      JOIN assessment_administrators aa ON aum.assessment_administrator_id = aa.id
+      WHERE aum.user_id = ? AND aa.status = 'ACTIVE'
+    `;
+    const [countRows] = await pool.execute(countQuery, [user_id]);
     const total = countRows[0].total;
 
     // Get paginated results
@@ -304,7 +327,9 @@ class AssessmentUserMapping {
 
     const mappings = rows.map(row => ({
       ...row,
-      segment_wise_scores: this.safeJsonParse(row.segment_wise_scores)
+      segment_wise_scores: this.safeJsonParse(row.segment_wise_scores),
+      total_attempts: row.total_attempts || 1,
+      current_attempt: row.attempt_number || 1
     }));
 
     return {
@@ -1172,6 +1197,104 @@ class AssessmentUserMapping {
     );
 
     return this.findById(id);
+  }
+
+  /**
+   * Refresh violation count (allow disqualified user to continue)
+   */
+  static async refreshViolation(mappingId) {
+    const mapping = await this.findById(mappingId);
+    if (!mapping) throw new Error('Mapping not found');
+
+    // Increment refresh_violation_count
+    await pool.execute(
+      `UPDATE assessment_user_mappings 
+       SET refresh_violation_count = COALESCE(refresh_violation_count, 1) + 1,
+           tab_switch_count = 0,
+           status = 'IN_PROGRESS'
+       WHERE id = ?`,
+      [mappingId]
+    );
+
+    // Reset metadata in proctoring_logs - mark old logs as part of previous violation cycle
+    // We do this by updating the metadata to include the cycle info
+    await pool.execute(
+      `UPDATE proctoring_logs 
+       SET metadata = JSON_SET(COALESCE(metadata, '{}'), '$.violation_cycle', ?)
+       WHERE assessment_user_mapping_id = ? 
+       AND (metadata IS NULL OR JSON_EXTRACT(metadata, '$.violation_cycle') IS NULL)`,
+      [mapping.refresh_violation_count || 1, mappingId]
+    );
+
+    const updatedMapping = await this.findById(mappingId);
+    return {
+      id: mappingId,
+      refresh_violation_count: updatedMapping.refresh_violation_count,
+      status: updatedMapping.status
+    };
+  }
+
+  /**
+   * Create a reattempt for a user (by admin)
+   */
+  static async createReattempt(mappingId) {
+    const mapping = await this.findById(mappingId);
+    if (!mapping) throw new Error('Mapping not found');
+
+    // Get the maximum attempt number for this user and administrator
+    const [maxAttemptRows] = await pool.execute(
+      `SELECT MAX(attempt_number) as max_attempt
+       FROM assessment_user_mappings
+       WHERE user_id = ? AND assessment_administrator_id = ?`,
+      [mapping.user_id, mapping.assessment_administrator_id]
+    );
+
+    const newAttemptNumber = (maxAttemptRows[0]?.max_attempt || 0) + 1;
+    const uniqueId = this.generateUniqueId();
+
+    // Create new mapping record with incremented attempt number
+    const [result] = await pool.execute(
+      `INSERT INTO assessment_user_mappings 
+       (unique_id, assessment_administrator_id, user_id, status, attempt_number, created_at)
+       VALUES (?, ?, ?, 'NOT_STARTED', ?, NOW())`,
+      [uniqueId, mapping.assessment_administrator_id, mapping.user_id, newAttemptNumber]
+    );
+
+    return {
+      id: result.insertId,
+      unique_id: uniqueId,
+      attempt_number: newAttemptNumber
+    };
+  }
+
+  /**
+   * Get the latest attempt mapping for a user and administrator
+   */
+  static async getLatestAttempt(userId, administratorId) {
+    const [rows] = await pool.execute(
+      `SELECT * FROM assessment_user_mappings
+       WHERE user_id = ? AND assessment_administrator_id = ?
+       ORDER BY attempt_number DESC
+       LIMIT 1`,
+      [userId, administratorId]
+    );
+    return rows[0];
+  }
+
+  /**
+   * Get total attempts count for a user and administrator
+   */
+  static async getTotalAttempts(userId, administratorId) {
+    const [rows] = await pool.execute(
+      `SELECT COUNT(*) as total, MAX(attempt_number) as max_attempt
+       FROM assessment_user_mappings
+       WHERE user_id = ? AND assessment_administrator_id = ?`,
+      [userId, administratorId]
+    );
+    return {
+      total: rows[0]?.total || 0,
+      max_attempt: rows[0]?.max_attempt || 0
+    };
   }
 }
 

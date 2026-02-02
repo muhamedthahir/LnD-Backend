@@ -683,6 +683,105 @@ const getUserMappings = async (req, res) => {
 };
 
 /**
+ * Allow user to reattempt assessment
+ */
+const allowReattempt = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    // Only allow reattempt for IN_PROGRESS, COMPLETED, SUBMITTED, or DISQUALIFIED
+    if (!['IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'DISQUALIFIED'].includes(mapping.status)) {
+      return res.status(400).json({ error: `Cannot allow reattempt for status: ${mapping.status}` });
+    }
+
+    const result = await AssessmentUserMapping.createReattempt(mapping_id);
+
+    res.json({
+      message: 'Reattempt allowed successfully',
+      mapping_id: result.id,
+      attempt_number: result.attempt_number
+    });
+  } catch (error) {
+    console.error('Error allowing reattempt:', error);
+    res.status(500).json({ error: error.message || 'Failed to allow reattempt' });
+  }
+};
+
+/**
+ * Refresh violation count for disqualified user
+ */
+const refreshViolation = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    // Only allow refresh for DISQUALIFIED status
+    if (mapping.status !== 'DISQUALIFIED') {
+      return res.status(400).json({ error: `Can only refresh violation for DISQUALIFIED users. Current status: ${mapping.status}` });
+    }
+
+    const result = await AssessmentUserMapping.refreshViolation(mapping_id);
+
+    res.json({
+      message: 'Violation refreshed successfully. User can continue the assessment.',
+      mapping_id: result.id,
+      refresh_violation_count: result.refresh_violation_count,
+      status: result.status
+    });
+  } catch (error) {
+    console.error('Error refreshing violation:', error);
+    res.status(500).json({ error: error.message || 'Failed to refresh violation' });
+  }
+};
+
+/**
+ * Delete user mapping
+ */
+const deleteUserMapping = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    await AssessmentUserMapping.delete(mapping_id);
+    res.json({ message: 'User mapping deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user mapping:', error);
+    res.status(500).json({ error: 'Failed to delete user mapping' });
+  }
+};
+
+/**
+ * Send invitation to user
+ */
+const sendInvitation = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    await AssessmentUserMapping.markMailSent(mapping_id);
+    
+    // TODO: Actually send email here
+    
+    res.json({ message: 'Invitation sent successfully' });
+  } catch (error) {
+    console.error('Error sending invitation:', error);
+    res.status(500).json({ error: 'Failed to send invitation' });
+  }
+};
+
+/**
  * Get user's assessments
  */
 const getMyAssessments = async (req, res) => {
@@ -1343,6 +1442,31 @@ const getAssessmentResult = async (req, res) => {
     const segmentProgress = await AssessmentSegmentProgress.getByMappingId(mapping_id);
     const proctoringLogs = await ProctoringLog.getByMappingId(mapping_id);
 
+    // Get proctoring config for max_tab_switch_allowed
+    const proctoringConfig = await ProctoringConfig.findByAdminId(mapping.assessment_administrator_id);
+    const maxTabSwitchAllowed = proctoringConfig?.max_tab_switch_allowed ?? -1;
+
+    // Get segment names for proctoring logs
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    const segments = await AssessmentSegment.getByAssessmentId(admin?.assessment_id);
+    const segmentMap = {};
+    segments.forEach(s => { segmentMap[s.id] = s.name; });
+
+    // Enhance proctoring logs with segment names
+    const enhancedProctoringLogs = proctoringLogs.map(log => ({
+      ...log,
+      segment_name: log.segment_id ? segmentMap[log.segment_id] || 'Unknown' : null,
+      violation_cycle: log.metadata?.violation_cycle || mapping.refresh_violation_count || 1
+    }));
+
+    // Calculate total violations:
+    // total = current_count + maxAllowed * (refresh_violation_count - 1)
+    const currentViolationCount = mapping.tab_switch_count || 0;
+    const refreshViolationCount = mapping.refresh_violation_count || 1;
+    const totalViolations = maxTabSwitchAllowed >= 0 
+      ? currentViolationCount + (maxTabSwitchAllowed * (refreshViolationCount - 1))
+      : currentViolationCount;
+
     // Enhance segment progress with detailed question data
     const detailedSegmentProgress = await Promise.all(segmentProgress.map(async (segment) => {
       // Get questions assigned to this user for this segment
@@ -1362,11 +1486,11 @@ const getAssessmentResult = async (req, res) => {
           is_attempted: !!submission,
           submitted_code: submission?.best_submitted_code,
           language_used: submission?.language_used,
-          test_cases_passed: submission?.test_cases_passed,
+          test_cases_passed: submission?.best_test_cases_passed,
           test_cases_total: submission?.test_cases_total,
           user_answer: submission?.last_selected_options ? 
             (typeof submission.last_selected_options === 'string' ? JSON.parse(submission.last_selected_options) : submission.last_selected_options).join(', ') : null,
-          score: submission?.score || 0
+          score: submission?.best_score || 0
         };
       }));
 
@@ -1377,9 +1501,19 @@ const getAssessmentResult = async (req, res) => {
     }));
 
     res.json({
-      mapping,
+      mapping: {
+        ...mapping,
+        refresh_violation_count: refreshViolationCount,
+        total_violations: totalViolations
+      },
       segment_progress: detailedSegmentProgress,
-      proctoring_logs: proctoringLogs,
+      proctoring_logs: enhancedProctoringLogs,
+      proctoring_summary: {
+        current_tab_switch_count: currentViolationCount,
+        refresh_violation_count: refreshViolationCount,
+        max_tab_switch_allowed: maxTabSwitchAllowed,
+        total_violations: totalViolations
+      },
       show_correct_answers: scoringConfig?.show_correct_answers_after || false
     });
   } catch (error) {
@@ -2097,6 +2231,10 @@ module.exports = {
   // User Mapping
   inviteUsers,
   getUserMappings,
+  allowReattempt,
+  refreshViolation,
+  deleteUserMapping,
+  sendInvitation,
   getMyAssessments,
   getStartInfo,
   startAssessment,
