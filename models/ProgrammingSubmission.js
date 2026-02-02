@@ -161,7 +161,7 @@ class ProgrammingSubmission {
    * Mark a question as attempted (assessment)
    */
   static async markAttemptedForAssessment(data) {
-    const { user_id, assessment_user_mapping_id, assessment_segment_id, programming_question_id } = data;
+    const { user_id, assessment_user_mapping_id, assessment_segment_id, programming_question_id  } = data;
     
     // Ensure assessment columns exist
     await this.ensureAssessmentColumns();

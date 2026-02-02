@@ -1585,11 +1585,8 @@ const saveProgress = async (req, res) => {
         status: 'IN_PROGRESS'
       });
 
-      // Mark the current question as 'attempted' if not already exists
-      const segments = await AssessmentSegment.getByAssessmentId(mapping.assessment_id);
-      const segment = segments.find(s => s.id === actualSegmentId);
       
-      if (segment && current_question_index !== undefined) {
+      if (actualSegmentId && current_question_index !== undefined) {
         // We need to know which question it is. 
         // In assessments, questions are assigned.
         const [assignments] = await pool.execute(
