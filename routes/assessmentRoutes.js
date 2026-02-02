@@ -50,6 +50,10 @@ router.delete('/administrators/:id', authenticate, authorize('primary_admin', 'c
 router.post('/administrators/invite', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.inviteUsers);
 router.get('/administrators/:administrator_id/users', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getUserMappings);
 router.get('/mappings/:mapping_id/result', authenticate, assessmentController.getAssessmentResult);
+router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattempt);
+router.post('/user-mappings/:mapping_id/refresh-violation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.refreshViolation);
+router.delete('/user-mappings/:mapping_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteUserMapping);
+router.post('/user-mappings/:mapping_id/send-invitation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.sendInvitation);
 
 // =====================================================
 // USER ROUTES - Assessment Taking
