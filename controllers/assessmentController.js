@@ -1366,7 +1366,7 @@ const getAssessmentResult = async (req, res) => {
           test_cases_total: submission?.test_cases_total,
           user_answer: submission?.last_selected_options ? 
             (typeof submission.last_selected_options === 'string' ? JSON.parse(submission.last_selected_options) : submission.last_selected_options).join(', ') : null,
-          score: submission?.best_score || 0
+          score: submission?.score || 0
         };
       }));
 
@@ -1491,14 +1491,6 @@ const saveAnswer = async (req, res) => {
       });
     }
 
-    // Update segment progress (attempted questions count)
-    await AssessmentSegmentProgress.updateQuestionProgress(
-      mapping_id,
-      mapping.current_segment_index,
-      question_id,
-      question_type
-    );
-
     // Update segment score from all submissions
     let segmentScore = null;
     let mappingScore = null;
@@ -1615,6 +1607,29 @@ const saveProgress = async (req, res) => {
           }
         }
       }
+
+      // Derive attempted_questions from submission records (do NOT increment on submit)
+      // attempted_questions = (#MCQ submissions + #Programming submissions) for this mapping+segment
+      const [mcqCountRows] = await pool.execute(
+        `SELECT COUNT(*) as cnt
+         FROM mcq_submissions
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [mapping_id, actualSegmentId]
+      );
+      const [progCountRows] = await pool.execute(
+        `SELECT COUNT(*) as cnt
+         FROM programming_submissions
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [mapping_id, actualSegmentId]
+      );
+
+      const attemptedQuestions =
+        (parseInt(mcqCountRows?.[0]?.cnt, 10) || 0) +
+        (parseInt(progCountRows?.[0]?.cnt, 10) || 0);
+
+      await AssessmentSegmentProgress.updateProgressByMappingAndSegment(mapping_id, actualSegmentId, {
+        attempted_questions: attemptedQuestions
+      });
     }
 
     res.json({ message: 'Progress saved' });
@@ -1758,14 +1773,6 @@ const submitCode = async (req, res) => {
       max_score: 1,
       execution_result: testResults
     });
-
-    // Update segment progress (attempted questions count)
-    await AssessmentSegmentProgress.updateQuestionProgress(
-      mapping_id,
-      mapping.current_segment_index,
-      question_id,
-      'PROGRAMMING'
-    );
 
     // Update segment score from all submissions
     let segmentScore = null;
