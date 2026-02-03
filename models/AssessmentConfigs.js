@@ -396,9 +396,11 @@ class SegmentProgrammingQuestion {
 
   static async getBySegmentId(assessment_segment_id) {
     const [rows] = await pool.execute(
-      `SELECT spq.*, pq.title, pq.description, pq.difficulty, pq.weightage as default_weightage
+      `SELECT spq.*, q.name as title, q.description, l.name as difficulty, q.points as default_weightage
        FROM segment_programming_questions spq
        JOIN programming_questions pq ON spq.programming_question_id = pq.id
+       JOIN questions q ON pq.question_id = q.id
+       LEFT JOIN levels l ON q.level_id = l.id
        WHERE spq.assessment_segment_id = ?
        ORDER BY spq.sequence_order ASC`,
       [assessment_segment_id]
@@ -530,9 +532,11 @@ class SegmentMCQQuestion {
 
   static async getBySegmentId(assessment_segment_id) {
     const [rows] = await pool.execute(
-      `SELECT smq.*, mq.question_text, mq.difficulty, mq.weightage as default_weightage
+      `SELECT smq.*, q.name as question_text, l.name as difficulty, q.points as default_weightage
        FROM segment_mcq_questions smq
        JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
+       JOIN questions q ON mq.question_id = q.id
+       LEFT JOIN levels l ON q.level_id = l.id
        WHERE smq.assessment_segment_id = ?
        ORDER BY smq.sequence_order ASC`,
       [assessment_segment_id]
@@ -941,17 +945,13 @@ class UserQuestionAssignment {
   static async getByMappingAndSegment(assessment_user_mapping_id, assessment_segment_id) {
     const [rows] = await pool.execute(
       `SELECT uqa.*,
-              CASE 
-                WHEN uqa.question_type = 'PROGRAMMING' THEN pq.title
-                WHEN uqa.question_type = 'MCQ' THEN mq.question_text
-              END as question_title,
-              CASE 
-                WHEN uqa.question_type = 'PROGRAMMING' THEN pq.difficulty
-                WHEN uqa.question_type = 'MCQ' THEN mq.difficulty
-              END as difficulty
+              q.name as question_title,
+              l.name as difficulty
        FROM user_question_assignments uqa
        LEFT JOIN programming_questions pq ON uqa.question_type = 'PROGRAMMING' AND uqa.question_id = pq.id
        LEFT JOIN mcq_multiselect_questions mq ON uqa.question_type = 'MCQ' AND uqa.question_id = mq.id
+       LEFT JOIN questions q ON (uqa.question_type = 'PROGRAMMING' AND pq.question_id = q.id) OR (uqa.question_type = 'MCQ' AND mq.question_id = q.id)
+       LEFT JOIN levels l ON q.level_id = l.id
        WHERE uqa.assessment_user_mapping_id = ? AND uqa.assessment_segment_id = ?
        ORDER BY uqa.sequence_order ASC`,
       [assessment_user_mapping_id, assessment_segment_id]
@@ -1151,7 +1151,7 @@ class ProctoringLog {
     );
     return rows.map(row => ({
       ...row,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null
+      metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata
     }));
   }
 }

@@ -240,6 +240,42 @@ class SubmissionController {
   }
 
   /**
+   * Mark a question as attempted in a practice segment
+   * POST /api/submissions/practice/attempt
+   */
+  static async attemptQuestion(req, res) {
+    try {
+      const { question_id, question_type, practice_segment_id, course_id } = req.body;
+      const user_id = req.user.id;
+
+      if (!question_id || !question_type || !practice_segment_id || !course_id) {
+        return res.status(400).json({ error: 'question_id, question_type, practice_segment_id, and course_id are required' });
+      }
+
+      if (question_type === 'PROGRAMMING') {
+        await ProgrammingSubmission.markAttempted({
+          user_id,
+          course_id,
+          practice_segment_id,
+          programming_question_id: question_id
+        });
+      } else if (question_type === 'MCQ') {
+        await MCQSubmission.markAttempted({
+          user_id,
+          course_id,
+          practice_segment_id,
+          mcq_question_id: question_id
+        });
+      }
+
+      res.json({ success: true, message: 'Question marked as attempted' });
+    } catch (error) {
+      console.error('Attempt question error:', error);
+      res.status(500).json({ error: 'Failed to mark question as attempted' });
+    }
+  }
+
+  /**
    * Submit programming answer
    * POST /api/submissions/programming/submit
    */

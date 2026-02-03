@@ -113,14 +113,19 @@ class LessonSubmission {
       let status = existing.status;
       let completed_at = existing.completed_at;
       
+      // Use the best progress (don't allow it to decrease)
+      const currentProgress = existing.progress_percentage || 0;
+      const bestProgress = Math.max(currentProgress, progress_percentage);
+      
       // Mark as complete if progress meets or exceeds threshold
-      if (progress_percentage >= threshold_value) {
+      if (bestProgress >= threshold_value && existing.status !== 'completed') {
         status = 'completed';
         completed_at = new Date();
-        progress_percentage = 100; // Set to 100 when threshold is met
-      } else if (progress_percentage > 0) {
+      } else if (bestProgress > 0 && status === 'not_started') {
         status = 'in_progress';
       }
+      
+      const finalProgress = status === 'completed' ? 100 : bestProgress;
       
       await pool.execute(
         `UPDATE lesson_submissions 
@@ -129,10 +134,10 @@ class LessonSubmission {
              completed_at = ?,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [progress_percentage, status, completed_at, existing.id]
+        [finalProgress, status, completed_at, existing.id]
       );
       
-      return { id: existing.id, status, progress_percentage, completed_at };
+      return { id: existing.id, status, progress_percentage: finalProgress, completed_at };
     }
     return null;
   }
@@ -147,20 +152,26 @@ class LessonSubmission {
     if (!existing) return null;
     
     // Calculate progress percentage based on watched/listened portion
-    const progress_percentage = total_duration > 0 
+    const calculatedProgress = total_duration > 0 
       ? Math.min(Math.round((current_position / total_duration) * 100), 100)
       : 0;
+    
+    // Use the best progress (don't allow it to decrease)
+    const currentProgress = existing.progress_percentage || 0;
+    const bestProgress = Math.max(currentProgress, calculatedProgress);
     
     let status = existing.status;
     let completed_at = existing.completed_at;
     
     // Mark as complete if progress meets or exceeds threshold
-    if (progress_percentage >= threshold_value) {
+    if (bestProgress >= threshold_value && existing.status !== 'completed') {
       status = 'completed';
       completed_at = new Date();
-    } else if (progress_percentage > 0) {
+    } else if (bestProgress > 0 && status === 'not_started') {
       status = 'in_progress';
     }
+    
+    const finalProgress = status === 'completed' ? 100 : bestProgress;
     
     await pool.execute(
       `UPDATE lesson_submissions 
@@ -169,13 +180,13 @@ class LessonSubmission {
            completed_at = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [status === 'completed' ? 100 : progress_percentage, status, completed_at, existing.id]
+      [finalProgress, status, completed_at, existing.id]
     );
     
     return { 
       id: existing.id, 
       status, 
-      progress_percentage: status === 'completed' ? 100 : progress_percentage,
+      progress_percentage: finalProgress,
       completed_at,
       current_position,
       total_duration

@@ -683,6 +683,105 @@ const getUserMappings = async (req, res) => {
 };
 
 /**
+ * Allow user to reattempt assessment
+ */
+const allowReattempt = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    // Only allow reattempt for IN_PROGRESS, COMPLETED, SUBMITTED, or DISQUALIFIED
+    if (!['IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'DISQUALIFIED'].includes(mapping.status)) {
+      return res.status(400).json({ error: `Cannot allow reattempt for status: ${mapping.status}` });
+    }
+
+    const result = await AssessmentUserMapping.createReattempt(mapping_id);
+
+    res.json({
+      message: 'Reattempt allowed successfully',
+      mapping_id: result.id,
+      attempt_number: result.attempt_number
+    });
+  } catch (error) {
+    console.error('Error allowing reattempt:', error);
+    res.status(500).json({ error: error.message || 'Failed to allow reattempt' });
+  }
+};
+
+/**
+ * Refresh violation count for disqualified user
+ */
+const refreshViolation = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    // Only allow refresh for DISQUALIFIED status
+    if (mapping.status !== 'DISQUALIFIED') {
+      return res.status(400).json({ error: `Can only refresh violation for DISQUALIFIED users. Current status: ${mapping.status}` });
+    }
+
+    const result = await AssessmentUserMapping.refreshViolation(mapping_id);
+
+    res.json({
+      message: 'Violation refreshed successfully. User can continue the assessment.',
+      mapping_id: result.id,
+      refresh_violation_count: result.refresh_violation_count,
+      status: result.status
+    });
+  } catch (error) {
+    console.error('Error refreshing violation:', error);
+    res.status(500).json({ error: error.message || 'Failed to refresh violation' });
+  }
+};
+
+/**
+ * Delete user mapping
+ */
+const deleteUserMapping = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    await AssessmentUserMapping.delete(mapping_id);
+    res.json({ message: 'User mapping deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user mapping:', error);
+    res.status(500).json({ error: 'Failed to delete user mapping' });
+  }
+};
+
+/**
+ * Send invitation to user
+ */
+const sendInvitation = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    await AssessmentUserMapping.markMailSent(mapping_id);
+    
+    // TODO: Actually send email here
+    
+    res.json({ message: 'Invitation sent successfully' });
+  } catch (error) {
+    console.error('Error sending invitation:', error);
+    res.status(500).json({ error: 'Failed to send invitation' });
+  }
+};
+
+/**
  * Get user's assessments
  */
 const getMyAssessments = async (req, res) => {
@@ -1327,24 +1426,94 @@ const getAssessmentResult = async (req, res) => {
       return res.status(404).json({ error: 'Assessment not found' });
     }
 
-    // Verify user or admin
-    if (mapping.user_id !== req.user.id && req.user.role !== 'admin') {
+    // Verify user or admin (primary_admin, college_admin, or generic admin)
+    const isAdmin = ['primary_admin', 'college_admin', 'admin'].includes(req.user.role);
+    
+    if (mapping.user_id !== req.user.id && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     // Get scoring config to check if results should be shown
     const scoringConfig = await ScoringConfig.findByAdminId(mapping.assessment_administrator_id);
-    if (!scoringConfig?.show_score_at_end && req.user.role !== 'admin') {
+    if (!scoringConfig?.show_score_at_end && !isAdmin) {
       return res.status(403).json({ error: 'Results are not available' });
     }
 
     const segmentProgress = await AssessmentSegmentProgress.getByMappingId(mapping_id);
     const proctoringLogs = await ProctoringLog.getByMappingId(mapping_id);
 
+    // Get proctoring config for max_tab_switch_allowed
+    const proctoringConfig = await ProctoringConfig.findByAdminId(mapping.assessment_administrator_id);
+    const maxTabSwitchAllowed = proctoringConfig?.max_tab_switch_allowed ?? -1;
+
+    // Get segment names for proctoring logs
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    const segments = await AssessmentSegment.getByAssessmentId(admin?.assessment_id);
+    const segmentMap = {};
+    segments.forEach(s => { segmentMap[s.id] = s.name; });
+
+    // Enhance proctoring logs with segment names
+    const enhancedProctoringLogs = proctoringLogs.map(log => ({
+      ...log,
+      segment_name: log.segment_id ? segmentMap[log.segment_id] || 'Unknown' : null,
+      violation_cycle: log.metadata?.violation_cycle || mapping.refresh_violation_count || 1
+    }));
+
+    // Calculate total violations:
+    // total = current_count + maxAllowed * (refresh_violation_count - 1)
+    const currentViolationCount = mapping.tab_switch_count || 0;
+    const refreshViolationCount = mapping.refresh_violation_count || 1;
+    const totalViolations = maxTabSwitchAllowed >= 0 
+      ? currentViolationCount + (maxTabSwitchAllowed * (refreshViolationCount - 1))
+      : currentViolationCount;
+
+    // Enhance segment progress with detailed question data
+    const detailedSegmentProgress = await Promise.all(segmentProgress.map(async (segment) => {
+      // Get questions assigned to this user for this segment
+      const questions = await UserQuestionAssignment.getByMappingAndSegment(mapping_id, segment.assessment_segment_id);
+      
+      // Get submissions for these questions
+      const enhancedQuestions = await Promise.all(questions.map(async (q) => {
+        let submission = null;
+        if (q.question_type === 'PROGRAMMING') {
+          submission = await ProgrammingSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+        } else {
+          submission = await MCQSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+        }
+
+        return {
+          ...q,
+          is_attempted: !!submission,
+          submitted_code: submission?.best_submitted_code,
+          language_used: submission?.language_used,
+          test_cases_passed: submission?.best_test_cases_passed,
+          test_cases_total: submission?.test_cases_total,
+          user_answer: submission?.last_selected_options ? 
+            (typeof submission.last_selected_options === 'string' ? JSON.parse(submission.last_selected_options) : submission.last_selected_options).join(', ') : null,
+          score: submission?.best_score || 0
+        };
+      }));
+
+      return {
+        ...segment,
+        questions: enhancedQuestions
+      };
+    }));
+
     res.json({
-      mapping,
-      segment_progress: segmentProgress,
-      proctoring_logs: proctoringLogs,
+      mapping: {
+        ...mapping,
+        refresh_violation_count: refreshViolationCount,
+        total_violations: totalViolations
+      },
+      segment_progress: detailedSegmentProgress,
+      proctoring_logs: enhancedProctoringLogs,
+      proctoring_summary: {
+        current_tab_switch_count: currentViolationCount,
+        refresh_violation_count: refreshViolationCount,
+        max_tab_switch_allowed: maxTabSwitchAllowed,
+        total_violations: totalViolations
+      },
       show_correct_answers: scoringConfig?.show_correct_answers_after || false
     });
   } catch (error) {
@@ -1456,14 +1625,6 @@ const saveAnswer = async (req, res) => {
       });
     }
 
-    // Update segment progress (attempted questions count)
-    await AssessmentSegmentProgress.updateQuestionProgress(
-      mapping_id,
-      mapping.current_segment_index,
-      question_id,
-      question_type
-    );
-
     // Update segment score from all submissions
     let segmentScore = null;
     let mappingScore = null;
@@ -1525,7 +1686,9 @@ const saveProgress = async (req, res) => {
       current_question_index,
       time_remaining,
       segment_time_remaining,
-      total_time_worked
+      total_time_worked,
+      segment_id,
+      time_spent
     });
 
     // Update segment progress if segment_id is provided or we can determine it
@@ -1546,6 +1709,60 @@ const saveProgress = async (req, res) => {
         time_used: time_spent,
         current_question_index: current_question_index,
         status: 'IN_PROGRESS'
+      });
+
+      
+      if (actualSegmentId && current_question_index !== undefined) {
+        // We need to know which question it is. 
+        // In assessments, questions are assigned.
+        const [assignments] = await pool.execute(
+          `SELECT question_id, question_type FROM user_question_assignments 
+           WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ? 
+           ORDER BY sequence_order ASC`,
+          [mapping_id, actualSegmentId]
+        );
+
+        if (assignments && assignments[current_question_index]) {
+          const { question_id, question_type } = assignments[current_question_index];
+          if (question_type === 'PROGRAMMING') {
+            await ProgrammingSubmission.markAttemptedForAssessment({
+              user_id: req.user.id,
+              assessment_user_mapping_id: mapping_id,
+              assessment_segment_id: actualSegmentId,
+              programming_question_id: question_id
+            });
+          } else if (question_type === 'MCQ') {
+            await MCQSubmission.markAttemptedForAssessment({
+              user_id: req.user.id,
+              assessment_user_mapping_id: mapping_id,
+              assessment_segment_id: actualSegmentId,
+              mcq_question_id: question_id
+            });
+          }
+        }
+      }
+
+      // Derive attempted_questions from submission records (do NOT increment on submit)
+      // attempted_questions = (#MCQ submissions + #Programming submissions) for this mapping+segment
+      const [mcqCountRows] = await pool.execute(
+        `SELECT COUNT(*) as cnt
+         FROM mcq_submissions
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [mapping_id, actualSegmentId]
+      );
+      const [progCountRows] = await pool.execute(
+        `SELECT COUNT(*) as cnt
+         FROM programming_submissions
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [mapping_id, actualSegmentId]
+      );
+
+      const attemptedQuestions =
+        (parseInt(mcqCountRows?.[0]?.cnt, 10) || 0) +
+        (parseInt(progCountRows?.[0]?.cnt, 10) || 0);
+
+      await AssessmentSegmentProgress.updateProgressByMappingAndSegment(mapping_id, actualSegmentId, {
+        attempted_questions: attemptedQuestions
       });
     }
 
@@ -1690,14 +1907,6 @@ const submitCode = async (req, res) => {
       max_score: 1,
       execution_result: testResults
     });
-
-    // Update segment progress (attempted questions count)
-    await AssessmentSegmentProgress.updateQuestionProgress(
-      mapping_id,
-      mapping.current_segment_index,
-      question_id,
-      'PROGRAMMING'
-    );
 
     // Update segment score from all submissions
     let segmentScore = null;
@@ -2022,6 +2231,10 @@ module.exports = {
   // User Mapping
   inviteUsers,
   getUserMappings,
+  allowReattempt,
+  refreshViolation,
+  deleteUserMapping,
+  sendInvitation,
   getMyAssessments,
   getStartInfo,
   startAssessment,
