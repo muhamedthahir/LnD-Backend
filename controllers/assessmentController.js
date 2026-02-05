@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const Assessment = require('../models/Assessment');
 const AssessmentSegment = require('../models/AssessmentSegment');
 const AssessmentAdministrator = require('../models/AssessmentAdministrator');
@@ -831,50 +831,40 @@ const downloadAssessmentReport = async (req, res) => {
       endRow: sheet1Rows.length - 1
     });
 
-    const workbook = XLSX.utils.book_new();
-    const sheet1 = XLSX.utils.aoa_to_sheet(sheet1Rows);
-    const sheet1Merges = [];
+    const workbook = new ExcelJS.Workbook();
+    const sheet1 = workbook.addWorksheet('Assessment Summary');
+    sheet1.columns = [{ width: 35 }, { width: 60 }];
+
+    sheet1Rows.forEach(row => sheet1.addRow(row));
 
     const headerStyle = {
       font: { bold: true },
-      fill: { fgColor: { rgb: 'FFF2CC' } },
-      alignment: { horizontal: 'center', vertical: 'center' }
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2CC' } },
+      alignment: { horizontal: 'center', vertical: 'middle' }
     };
     const detailStyle = {
-      alignment: { horizontal: 'left', vertical: 'center' },
+      alignment: { horizontal: 'left', vertical: 'middle' },
       border: {
-        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        right: { style: 'thin', color: { rgb: 'D9D9D9' } }
+        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
       }
-    };
-
-    const setCellStyle = (rowIndex, colIndex, style) => {
-      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
-      if (!sheet1[cellRef]) {
-        sheet1[cellRef] = { t: 's', v: '' };
-      }
-      sheet1[cellRef].s = style;
     };
 
     sections.forEach(section => {
-      sheet1Merges.push({
-        s: { r: section.headerRow, c: 0 },
-        e: { r: section.headerRow, c: 1 }
-      });
-      setCellStyle(section.headerRow, 0, headerStyle);
-      setCellStyle(section.headerRow, 1, headerStyle);
+      const headerRowNumber = section.headerRow + 1;
+      sheet1.mergeCells(`A${headerRowNumber}:B${headerRowNumber}`);
+      const headerRow = sheet1.getRow(headerRowNumber);
+      headerRow.getCell(1).style = headerStyle;
+      headerRow.getCell(2).style = headerStyle;
 
-      for (let rowIndex = section.startRow; rowIndex <= section.endRow; rowIndex += 1) {
-        setCellStyle(rowIndex, 0, detailStyle);
-        setCellStyle(rowIndex, 1, detailStyle);
+      for (let rowIndex = section.startRow + 1; rowIndex <= section.endRow + 1; rowIndex += 1) {
+        const row = sheet1.getRow(rowIndex);
+        row.getCell(1).style = detailStyle;
+        row.getCell(2).style = detailStyle;
       }
     });
-
-    sheet1['!merges'] = sheet1Merges;
-    sheet1['!cols'] = [{ wch: 35 }, { wch: 60 }];
-    XLSX.utils.book_append_sheet(workbook, sheet1, 'Assessment Summary');
 
     // Sheet 2: User details with segment/question columns
     const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
@@ -1031,73 +1021,67 @@ const downloadAssessmentReport = async (req, res) => {
       sheet2Rows.push(dataRow);
     });
 
-    const sheet2 = XLSX.utils.aoa_to_sheet(sheet2Rows);
-    sheet2['!merges'] = merges;
+    const sheet2 = workbook.addWorksheet('User Details');
+    sheet2Rows.forEach(row => sheet2.addRow(row));
 
-    const sheet2Range = XLSX.utils.decode_range(sheet2['!ref']);
+    merges.forEach(merge => {
+      sheet2.mergeCells(
+        merge.s.r + 1,
+        merge.s.c + 1,
+        merge.e.r + 1,
+        merge.e.c + 1
+      );
+    });
+
     const sheet2HeaderStyle = {
       font: { bold: true },
-      fill: { fgColor: { rgb: 'FFF2CC' } },
-      alignment: { horizontal: 'left', vertical: 'center' },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2CC' } },
+      alignment: { horizontal: 'center', vertical: 'middle' },
       border: {
-        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        right: { style: 'thin', color: { rgb: 'D9D9D9' } }
+        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
       }
     };
     const sheet2CellStyle = {
-      alignment: { horizontal: 'left', vertical: 'center' },
+      alignment: { horizontal: 'left', vertical: 'middle' },
       border: {
-        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
-        right: { style: 'thin', color: { rgb: 'D9D9D9' } }
+        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
       }
     };
     const statusStyles = {
-      DISQUALIFIED: { fill: { fgColor: { rgb: 'F8D7DA' } } },
-      COMPLETED: { fill: { fgColor: { rgb: 'D4EDDA' } } },
-      SUBMITTED: { fill: { fgColor: { rgb: 'D4EDDA' } } },
-      IN_PROGRESS: { fill: { fgColor: { rgb: 'FFF3CD' } } }
+      DISQUALIFIED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8D7DA' } } },
+      COMPLETED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } } },
+      SUBMITTED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } } },
+      IN_PROGRESS: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } } }
     };
 
-    const setSheet2Style = (rowIndex, colIndex, style) => {
-      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
-      if (!sheet2[cellRef]) {
-        sheet2[cellRef] = { t: 's', v: '' };
-      }
-      sheet2[cellRef].s = style;
-    };
+    sheet2.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      row.eachCell({ includeEmpty: true }, (cell) => {
+        cell.style = rowNumber <= 2 ? sheet2HeaderStyle : sheet2CellStyle;
+      });
+    });
 
-    for (let rowIndex = sheet2Range.s.r; rowIndex <= sheet2Range.e.r; rowIndex += 1) {
-      for (let colIndex = sheet2Range.s.c; colIndex <= sheet2Range.e.c; colIndex += 1) {
-        const isHeaderRow = rowIndex === 0 || rowIndex === 1;
-        const baseStyle = isHeaderRow ? sheet2HeaderStyle : sheet2CellStyle;
-        setSheet2Style(rowIndex, colIndex, baseStyle);
-      }
-    }
-
-    const statusColIndex = baseHeaders.indexOf('Status');
-    if (statusColIndex >= 0) {
-      for (let rowIndex = 2; rowIndex <= sheet2Range.e.r; rowIndex += 1) {
-        const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: statusColIndex });
-        const cellValue = sheet2[cellRef]?.v;
-        const statusStyle = statusStyles[cellValue];
+    const statusColIndex = baseHeaders.indexOf('Status') + 1;
+    if (statusColIndex > 0) {
+      sheet2.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+        if (rowNumber <= 2) return;
+        const cell = row.getCell(statusColIndex);
+        const statusStyle = statusStyles[cell.value];
         if (statusStyle) {
-          setSheet2Style(rowIndex, statusColIndex, {
-            ...sheet2CellStyle,
-            ...statusStyle
-          });
+          cell.style = { ...sheet2CellStyle, ...statusStyle };
         }
-      }
+      });
     }
-    XLSX.utils.book_append_sheet(workbook, sheet2, 'User Details');
 
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const buffer = await workbook.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=assessment-report-${administrator_id}.xlsx`);
-    res.send(buffer);
+    res.send(Buffer.from(buffer));
   } catch (error) {
     console.error('Error generating assessment report:', error);
     res.status(500).json({ error: 'Failed to generate assessment report' });
