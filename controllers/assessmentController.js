@@ -838,7 +838,7 @@ const downloadAssessmentReport = async (req, res) => {
     const headerStyle = {
       font: { bold: true },
       fill: { fgColor: { rgb: 'FFF2CC' } },
-      alignment: { horizontal: 'left', vertical: 'center' }
+      alignment: { horizontal: 'center', vertical: 'center' }
     };
     const detailStyle = {
       alignment: { horizontal: 'left', vertical: 'center' },
