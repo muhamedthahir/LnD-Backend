@@ -1979,6 +1979,31 @@ const getAssessmentResult = async (req, res) => {
 };
 
 /**
+ * Increment resume count when user continues an in-progress assessment
+ */
+const incrementResumeCount = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: 'Assessment is not in progress' });
+    }
+
+    await AssessmentUserMapping.resume(mapping_id);
+    res.json({ message: 'Resume count updated' });
+  } catch (error) {
+    console.error('Error incrementing resume count:', error);
+    res.status(500).json({ error: 'Failed to update resume count' });
+  }
+};
+
+/**
  * Save answer (auto-save individual answer)
  * For MCQ, also calculates if answer is correct
  */
@@ -2702,6 +2727,7 @@ module.exports = {
   logProctoringEvent,
   submitFeedback,
   getAssessmentResult,
+  incrementResumeCount,
   saveAnswer,
   saveProgress,
   submitCode,

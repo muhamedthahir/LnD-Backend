@@ -65,6 +65,7 @@ router.get('/my-assessments', authenticate, assessmentController.getMyAssessment
 
 // Get Start Info (before starting)
 router.get('/user/assessments/:mapping_id/start-info', authenticate, assessmentController.getStartInfo);
+router.post('/user/assessments/:mapping_id/resume', authenticate, assessmentController.incrementResumeCount);
 
 // Start Assessment (both routes for compatibility)
 router.post('/user/assessments/:mapping_id/start', authenticate, assessmentController.startAssessment);
