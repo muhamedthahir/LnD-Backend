@@ -272,8 +272,12 @@ CREATE TABLE IF NOT EXISTS assessment_user_mappings (
     submitted_at DATETIME DEFAULT NULL,
     total_time_worked INT DEFAULT 0 COMMENT 'Total seconds worked',
     current_segment_index INT DEFAULT 0,
+    current_question_index INT DEFAULT 0,
+    time_remaining INT DEFAULT 0,
+    segment_time_remaining INT DEFAULT 0,
     last_activity_at DATETIME DEFAULT NULL,
     resume_count INT DEFAULT 0,
+    attempt_count INT DEFAULT 1,
     -- Scoring
     total_score DECIMAL(10,2) DEFAULT 0,
     max_possible_score DECIMAL(10,2) DEFAULT 0,
@@ -284,6 +288,7 @@ CREATE TABLE IF NOT EXISTS assessment_user_mappings (
     ip_address VARCHAR(45) DEFAULT NULL,
     browser_info VARCHAR(500) DEFAULT NULL,
     tab_switch_count INT DEFAULT 0,
+    refresh_violation_count INT DEFAULT 1,
     -- Feedback
     feedback_rating INT DEFAULT NULL CHECK (feedback_rating BETWEEN 1 AND 5),
     feedback_comment TEXT DEFAULT NULL,
