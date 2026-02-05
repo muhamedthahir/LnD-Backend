@@ -30,11 +30,22 @@ const formatLabel = (value) => {
 
 const isBooleanLikeKey = (key) => /(enabled|enable|allow|is_|_required|mandatory|disable|auto_|random)/i.test(key);
 
+const formatDateTime = (value) => {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (num) => num.toString().padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+};
+
 const formatConfigValue = (key, value) => {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if ((value === 0 || value === 1) && isBooleanLikeKey(key)) {
     return value === 1 ? 'Yes' : 'No';
+  }
+  if (/(date|time|timestamp)/i.test(key)) {
+    return formatDateTime(value);
   }
   return value;
 };
@@ -898,6 +909,11 @@ const downloadAssessmentReport = async (req, res) => {
       'Section',
       'Status',
       'Score (%)',
+      'Time Remaining',
+      'Attempt Start Time',
+      'Attempt End Time',
+      'Refresh Violation Count',
+      'Attempt Number',
       'Attempts Taken',
       'Segments Attempted'
     ];
@@ -914,6 +930,9 @@ const downloadAssessmentReport = async (req, res) => {
     segmentDetails.forEach(segment => {
       const segmentStartCol = currentCol;
       const questions = segment.questions;
+      headerRow1.push(segment.name);
+      headerRow2.push('Segment Time Remaining');
+      currentCol += 1;
       questions.forEach(question => {
         headerRow1.push(segment.name);
         const questionLabel = question.type === 'PROGRAMMING'
@@ -936,6 +955,7 @@ const downloadAssessmentReport = async (req, res) => {
 
     const mappingIds = mappingRows.map(row => row.id);
     const segmentAttemptMap = {};
+    const segmentTimeRemainingMap = {};
     const mcqSubmissionMap = {};
     const programmingSubmissionMap = {};
 
@@ -950,6 +970,17 @@ const downloadAssessmentReport = async (req, res) => {
       );
       segmentCounts.forEach(row => {
         segmentAttemptMap[row.assessment_user_mapping_id] = row.segments_attempted;
+      });
+
+      const [segmentTimes] = await pool.execute(
+        `SELECT assessment_user_mapping_id, assessment_segment_id, time_remaining
+         FROM assessment_segment_progress
+         WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
+        mappingIds
+      );
+      segmentTimes.forEach(row => {
+        const key = `${row.assessment_user_mapping_id}:${row.assessment_segment_id}`;
+        segmentTimeRemainingMap[key] = row.time_remaining ?? '';
       });
 
       const [mcqRows] = await pool.execute(
@@ -991,11 +1022,18 @@ const downloadAssessmentReport = async (req, res) => {
         row.percentage_score !== null && row.percentage_score !== undefined
           ? Number(row.percentage_score)
           : '',
+        row.time_remaining ?? '',
+        formatDateTime(row.assessment_started_time),
+        formatDateTime(row.assessment_ended_time || row.submitted_at),
+        row.refresh_violation_count ?? 'NA',
+        row.attempt_number ?? 'NA',
         row.attempts_taken || row.attempt_number || 1,
         segmentAttemptMap[row.id] || 0
       ];
 
       segmentDetails.forEach(segment => {
+        const segmentKey = `${row.id}:${segment.id}`;
+        dataRow.push(segmentTimeRemainingMap[segmentKey] ?? '');
         segment.questions.forEach(question => {
           const key = `${row.id}:${question.id}`;
           if (question.type === 'PROGRAMMING') {
@@ -1057,7 +1095,7 @@ const downloadAssessmentReport = async (req, res) => {
       DISQUALIFIED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF0000' } } },
       COMPLETED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FF00' } } },
       SUBMITTED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } } },
-      IN_PROGRESS: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } } }
+      IN_PROGRESS: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } } }
     };
 
     sheet2.eachRow({ includeEmpty: true }, (row, rowNumber) => {
