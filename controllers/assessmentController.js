@@ -38,6 +38,19 @@ const formatDateTime = (value) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 };
 
+const formatDurationMinutes = (value) => {
+  if (value === null || value === undefined || value === '') return '';
+  const totalSeconds = Number(value);
+  if (Number.isNaN(totalSeconds)) return value;
+  const totalMinutes = Math.ceil(totalSeconds / 60);
+  if (totalMinutes >= 60) {
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  }
+  return `${totalMinutes}m`;
+};
+
 const formatConfigValue = (key, value) => {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -826,14 +839,13 @@ const downloadAssessmentReport = async (req, res) => {
 
     const statusHeaderRow = addSectionHeader('User Status Summary');
     const statusStartRow = sheet1Rows.length;
+    let notStartedCount = statusCounts.total - takenCount;
     sheet1Rows.push(
       ['Total Users', statusCounts.total || 0],
       ['Users Taken Assessment', takenCount],
-      ['Users Invited', statusCounts.INVITED || 0],
-      ['Users Not Started', statusCounts.NOT_STARTED || 0],
+      ['Users Not Started', notStartedCount || 0],
       ['Users In Progress', statusCounts.IN_PROGRESS || 0],
       ['Users Completed', statusCounts.COMPLETED || 0],
-      ['Users Submitted', statusCounts.SUBMITTED || 0],
       ['Users Disqualified', statusCounts.DISQUALIFIED || 0]
     );
     sections.push({
@@ -1022,7 +1034,7 @@ const downloadAssessmentReport = async (req, res) => {
         row.percentage_score !== null && row.percentage_score !== undefined
           ? Number(row.percentage_score)
           : '',
-        row.time_remaining ?? '',
+        formatDurationMinutes(row.time_remaining),
         formatDateTime(row.assessment_started_time),
         formatDateTime(row.assessment_ended_time || row.submitted_at),
         row.refresh_violation_count ?? 'NA',
@@ -1033,7 +1045,7 @@ const downloadAssessmentReport = async (req, res) => {
 
       segmentDetails.forEach(segment => {
         const segmentKey = `${row.id}:${segment.id}`;
-        dataRow.push(segmentTimeRemainingMap[segmentKey] ?? '');
+        dataRow.push(formatDurationMinutes(segmentTimeRemainingMap[segmentKey]));
         segment.questions.forEach(question => {
           const key = `${row.id}:${question.id}`;
           if (question.type === 'PROGRAMMING') {
