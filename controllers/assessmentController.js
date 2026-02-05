@@ -839,16 +839,16 @@ const downloadAssessmentReport = async (req, res) => {
 
     const headerStyle = {
       font: { bold: true },
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2CC' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } },
       alignment: { horizontal: 'center', vertical: 'middle' }
     };
     const detailStyle = {
-      alignment: { horizontal: 'left', vertical: 'middle' },
+      alignment: { horizontal: 'center', vertical: 'middle' },
       border: {
-        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
+        top: { style: 'thin', color: { argb: 'FF000000' } },
+        bottom: { style: 'thin', color: { argb: 'FF000000' } },
+        left: { style: 'thin', color: { argb: 'FF000000' } },
+        right: { style: 'thin', color: { argb: 'FF000000' } }
       }
     };
 
@@ -1035,29 +1035,29 @@ const downloadAssessmentReport = async (req, res) => {
 
     const sheet2HeaderStyle = {
       font: { bold: true },
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2CC' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } },
       alignment: { horizontal: 'center', vertical: 'middle' },
       border: {
-        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
+        top: { style: 'thin', color: { argb: 'FF000000' } },
+        bottom: { style: 'thin', color: { argb: 'FF000000' } },
+        left: { style: 'thin', color: { argb: 'FF000000' } },
+        right: { style: 'thin', color: { argb: 'FF000000' } }
       }
     };
     const sheet2CellStyle = {
       alignment: { horizontal: 'left', vertical: 'middle' },
       border: {
-        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
-        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
+        top: { style: 'thin', color: { argb: 'FF000000' } },
+        bottom: { style: 'thin', color: { argb: 'FF000000' } },
+        left: { style: 'thin', color: { argb: 'FF000000' } },
+        right: { style: 'thin', color: { argb: 'FF000000' } }
       }
     };
     const statusStyles = {
-      DISQUALIFIED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8D7DA' } } },
-      COMPLETED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } } },
+      DISQUALIFIED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF0000' } } },
+      COMPLETED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FF00' } } },
       SUBMITTED: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } } },
-      IN_PROGRESS: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } } }
+      IN_PROGRESS: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } } }
     };
 
     sheet2.eachRow({ includeEmpty: true }, (row, rowNumber) => {
