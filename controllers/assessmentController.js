@@ -28,15 +28,30 @@ const formatLabel = (value) => {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 };
 
-const appendConfigSection = (rows, title, config) => {
+const isBooleanLikeKey = (key) => /(enabled|enable|allow|is_|_required|mandatory|disable|auto_|random)/i.test(key);
+
+const formatConfigValue = (key, value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if ((value === 0 || value === 1) && isBooleanLikeKey(key)) {
+    return value === 1 ? 'Yes' : 'No';
+  }
+  return value;
+};
+
+const appendConfigSection = (rows, title, config, sections) => {
   if (!config) return;
+  const headerRow = rows.length;
   rows.push([title]);
+  const startRow = rows.length;
   Object.entries(config).forEach(([key, value]) => {
     if (['id', 'assessment_administrator_id', 'created_at', 'last_updated_at'].includes(key)) {
       return;
     }
-    rows.push([formatLabel(key), value !== null && value !== undefined ? value : '']);
+    rows.push([formatLabel(key), formatConfigValue(key, value)]);
   });
+  const endRow = rows.length - 1;
+  sections.push({ headerRow, startRow, endRow });
   rows.push([]);
 };
 
@@ -721,6 +736,8 @@ const downloadAssessmentReport = async (req, res) => {
       `SELECT aum.*,
               u.name as user_name,
               u.email as user_email,
+              u.department as user_department,
+              u.section as user_section,
               ud.mobile_number as user_phone,
               (
                 SELECT COUNT(*)
@@ -749,31 +766,56 @@ const downloadAssessmentReport = async (req, res) => {
       .reduce((sum, status) => sum + (statusCounts[status] || 0), 0);
 
     // Sheet 1: Assessment + Config details
-    const sheet1Rows = [
-      ['Assessment Details'],
+    const sheet1Rows = [];
+    const sections = [];
+
+    const addSectionHeader = (title) => {
+      const headerRow = sheet1Rows.length;
+      sheet1Rows.push([title]);
+      return headerRow;
+    };
+
+    const assessmentHeaderRow = addSectionHeader('Assessment Details');
+    const assessmentStartRow = sheet1Rows.length;
+    sheet1Rows.push(
       ['Assessment Title', assessment?.title || admin.assessment_title || ''],
       ['Assessment Unique ID', assessment?.unique_id || admin.assessment_unique_id || ''],
       ['Description', assessment?.description || ''],
       ['Institution', assessment?.institution_name || ''],
-      ['Topic', assessment?.topic_name || ''],
-      [],
-      ['Administrator Details'],
+      ['Topic', assessment?.topic_name || '']
+    );
+    sections.push({
+      headerRow: assessmentHeaderRow,
+      startRow: assessmentStartRow,
+      endRow: sheet1Rows.length - 1
+    });
+    sheet1Rows.push([]);
+
+    const adminHeaderRow = addSectionHeader('Administrator Details');
+    const adminStartRow = sheet1Rows.length;
+    sheet1Rows.push(
       ['Display Name', admin.display_name || ''],
       ['Administrator Unique ID', admin.unique_id || ''],
       ['Status', admin.status || ''],
       ['Config Name', admin.config_name || ''],
-      ['Category', admin.category_name || ''],
-      []
-    ];
+      ['Category', admin.category_name || '']
+    );
+    sections.push({
+      headerRow: adminHeaderRow,
+      startRow: adminStartRow,
+      endRow: sheet1Rows.length - 1
+    });
+    sheet1Rows.push([]);
 
-    appendConfigSection(sheet1Rows, 'Timing Configuration', admin.timing_config);
-    appendConfigSection(sheet1Rows, 'Proctoring Configuration', admin.proctoring_config);
-    appendConfigSection(sheet1Rows, 'Scoring Configuration', admin.scoring_config);
-    appendConfigSection(sheet1Rows, 'Question Configuration', admin.question_config);
-    appendConfigSection(sheet1Rows, 'Access Configuration', admin.access_config);
+    appendConfigSection(sheet1Rows, 'Timing Configuration', admin.timing_config, sections);
+    appendConfigSection(sheet1Rows, 'Proctoring Configuration', admin.proctoring_config, sections);
+    appendConfigSection(sheet1Rows, 'Scoring Configuration', admin.scoring_config, sections);
+    appendConfigSection(sheet1Rows, 'Question Configuration', admin.question_config, sections);
+    appendConfigSection(sheet1Rows, 'Access Configuration', admin.access_config, sections);
 
+    const statusHeaderRow = addSectionHeader('User Status Summary');
+    const statusStartRow = sheet1Rows.length;
     sheet1Rows.push(
-      ['User Status Summary'],
       ['Total Users', statusCounts.total || 0],
       ['Users Taken Assessment', takenCount],
       ['Users Invited', statusCounts.INVITED || 0],
@@ -783,9 +825,54 @@ const downloadAssessmentReport = async (req, res) => {
       ['Users Submitted', statusCounts.SUBMITTED || 0],
       ['Users Disqualified', statusCounts.DISQUALIFIED || 0]
     );
+    sections.push({
+      headerRow: statusHeaderRow,
+      startRow: statusStartRow,
+      endRow: sheet1Rows.length - 1
+    });
 
     const workbook = XLSX.utils.book_new();
     const sheet1 = XLSX.utils.aoa_to_sheet(sheet1Rows);
+    const sheet1Merges = [];
+
+    const headerStyle = {
+      font: { bold: true },
+      fill: { fgColor: { rgb: 'FFF2CC' } },
+      alignment: { horizontal: 'left', vertical: 'center' }
+    };
+    const detailStyle = {
+      alignment: { horizontal: 'left', vertical: 'center' },
+      border: {
+        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        right: { style: 'thin', color: { rgb: 'D9D9D9' } }
+      }
+    };
+
+    const setCellStyle = (rowIndex, colIndex, style) => {
+      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
+      if (!sheet1[cellRef]) {
+        sheet1[cellRef] = { t: 's', v: '' };
+      }
+      sheet1[cellRef].s = style;
+    };
+
+    sections.forEach(section => {
+      sheet1Merges.push({
+        s: { r: section.headerRow, c: 0 },
+        e: { r: section.headerRow, c: 1 }
+      });
+      setCellStyle(section.headerRow, 0, headerStyle);
+      setCellStyle(section.headerRow, 1, headerStyle);
+
+      for (let rowIndex = section.startRow; rowIndex <= section.endRow; rowIndex += 1) {
+        setCellStyle(rowIndex, 0, detailStyle);
+        setCellStyle(rowIndex, 1, detailStyle);
+      }
+    });
+
+    sheet1['!merges'] = sheet1Merges;
     sheet1['!cols'] = [{ wch: 35 }, { wch: 60 }];
     XLSX.utils.book_append_sheet(workbook, sheet1, 'Assessment Summary');
 
@@ -817,6 +904,8 @@ const downloadAssessmentReport = async (req, res) => {
       'Name',
       'Email',
       'Phone',
+      'Department',
+      'Section',
       'Status',
       'Score (%)',
       'Attempts Taken',
@@ -858,7 +947,7 @@ const downloadAssessmentReport = async (req, res) => {
     const mappingIds = mappingRows.map(row => row.id);
     const segmentAttemptMap = {};
     const mcqSubmissionMap = {};
-    const codeSubmissionMap = {};
+    const programmingSubmissionMap = {};
 
     if (mappingIds.length > 0) {
       const [segmentCounts] = await pool.execute(
@@ -873,41 +962,31 @@ const downloadAssessmentReport = async (req, res) => {
         segmentAttemptMap[row.assessment_user_mapping_id] = row.segments_attempted;
       });
 
-      try {
-        const [mcqRows] = await pool.execute(
-          `SELECT assessment_user_mapping_id, question_id, score, is_correct
-           FROM user_question_submissions
-           WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
-          mappingIds
-        );
-        mcqRows.forEach(row => {
-          const key = `${row.assessment_user_mapping_id}:${row.question_id}`;
-          mcqSubmissionMap[key] = row.score ?? (row.is_correct ? 'Correct' : '');
-        });
-      } catch (error) {
-        if (error.code !== 'ER_NO_SUCH_TABLE') {
-          throw error;
-        }
-      }
+      const [mcqRows] = await pool.execute(
+        `SELECT assessment_user_mapping_id, mcq_question_id, best_score
+         FROM mcq_submissions
+         WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
+        mappingIds
+      );
+      mcqRows.forEach(row => {
+        const key = `${row.assessment_user_mapping_id}:${row.mcq_question_id}`;
+        mcqSubmissionMap[key] = row.best_score;
+      });
 
-      try {
-        const [codeRows] = await pool.execute(
-          `SELECT assessment_user_mapping_id, question_id, test_cases_passed, test_cases_total
-           FROM assessment_code_submissions
-           WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
-          mappingIds
-        );
-        codeRows.forEach(row => {
-          const key = `${row.assessment_user_mapping_id}:${row.question_id}`;
-          const passed = row.test_cases_passed ?? 0;
-          const total = row.test_cases_total ?? 0;
-          codeSubmissionMap[key] = `${passed}/${total}`;
-        });
-      } catch (error) {
-        if (error.code !== 'ER_NO_SUCH_TABLE') {
-          throw error;
-        }
-      }
+      const [progRows] = await pool.execute(
+        `SELECT assessment_user_mapping_id, programming_question_id, best_score, best_test_cases_passed, test_cases_total
+         FROM programming_submissions
+         WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
+        mappingIds
+      );
+      progRows.forEach(row => {
+        const key = `${row.assessment_user_mapping_id}:${row.programming_question_id}`;
+        programmingSubmissionMap[key] = {
+          score: row.best_score,
+          passed: row.best_test_cases_passed ?? 0,
+          total: row.test_cases_total ?? 0
+        };
+      });
     }
 
     const sheet2Rows = [headerRow1, headerRow2];
@@ -915,7 +994,9 @@ const downloadAssessmentReport = async (req, res) => {
       const dataRow = [
         row.user_name || '',
         row.user_email || '',
-        row.user_phone || '',
+        row.user_phone || 'NA',
+        row.user_department || 'NA',
+        row.user_section || 'NA',
         row.status || '',
         row.percentage_score !== null && row.percentage_score !== undefined
           ? Number(row.percentage_score)
@@ -928,9 +1009,20 @@ const downloadAssessmentReport = async (req, res) => {
         segment.questions.forEach(question => {
           const key = `${row.id}:${question.id}`;
           if (question.type === 'PROGRAMMING') {
-            dataRow.push(codeSubmissionMap[key] || '');
+            const submission = programmingSubmissionMap[key];
+            if (submission && submission.total > 0) {
+              const scoreValue = submission.score !== null && submission.score !== undefined
+                ? Number(submission.score).toFixed(2)
+                : '0.00';
+              dataRow.push(`${scoreValue} (${submission.passed}/${submission.total})`);
+            } else if (submission && submission.score !== null && submission.score !== undefined) {
+              dataRow.push(Number(submission.score).toFixed(2));
+            } else {
+              dataRow.push('');
+            }
           } else {
-            dataRow.push(mcqSubmissionMap[key] ?? '');
+            const score = mcqSubmissionMap[key];
+            dataRow.push(score !== null && score !== undefined ? Number(score).toFixed(2) : '');
           }
         });
       });
@@ -941,6 +1033,65 @@ const downloadAssessmentReport = async (req, res) => {
 
     const sheet2 = XLSX.utils.aoa_to_sheet(sheet2Rows);
     sheet2['!merges'] = merges;
+
+    const sheet2Range = XLSX.utils.decode_range(sheet2['!ref']);
+    const sheet2HeaderStyle = {
+      font: { bold: true },
+      fill: { fgColor: { rgb: 'FFF2CC' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+      border: {
+        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        right: { style: 'thin', color: { rgb: 'D9D9D9' } }
+      }
+    };
+    const sheet2CellStyle = {
+      alignment: { horizontal: 'left', vertical: 'center' },
+      border: {
+        top: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        left: { style: 'thin', color: { rgb: 'D9D9D9' } },
+        right: { style: 'thin', color: { rgb: 'D9D9D9' } }
+      }
+    };
+    const statusStyles = {
+      DISQUALIFIED: { fill: { fgColor: { rgb: 'F8D7DA' } } },
+      COMPLETED: { fill: { fgColor: { rgb: 'D4EDDA' } } },
+      SUBMITTED: { fill: { fgColor: { rgb: 'D4EDDA' } } },
+      IN_PROGRESS: { fill: { fgColor: { rgb: 'FFF3CD' } } }
+    };
+
+    const setSheet2Style = (rowIndex, colIndex, style) => {
+      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
+      if (!sheet2[cellRef]) {
+        sheet2[cellRef] = { t: 's', v: '' };
+      }
+      sheet2[cellRef].s = style;
+    };
+
+    for (let rowIndex = sheet2Range.s.r; rowIndex <= sheet2Range.e.r; rowIndex += 1) {
+      for (let colIndex = sheet2Range.s.c; colIndex <= sheet2Range.e.c; colIndex += 1) {
+        const isHeaderRow = rowIndex === 0 || rowIndex === 1;
+        const baseStyle = isHeaderRow ? sheet2HeaderStyle : sheet2CellStyle;
+        setSheet2Style(rowIndex, colIndex, baseStyle);
+      }
+    }
+
+    const statusColIndex = baseHeaders.indexOf('Status');
+    if (statusColIndex >= 0) {
+      for (let rowIndex = 2; rowIndex <= sheet2Range.e.r; rowIndex += 1) {
+        const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: statusColIndex });
+        const cellValue = sheet2[cellRef]?.v;
+        const statusStyle = statusStyles[cellValue];
+        if (statusStyle) {
+          setSheet2Style(rowIndex, statusColIndex, {
+            ...sheet2CellStyle,
+            ...statusStyle
+          });
+        }
+      }
+    }
     XLSX.utils.book_append_sheet(workbook, sheet2, 'User Details');
 
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
