@@ -49,6 +49,7 @@ router.delete('/administrators/:id', authenticate, authorize('primary_admin', 'c
 // User Mapping (Admin)
 router.post('/administrators/invite', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.inviteUsers);
 router.get('/administrators/:administrator_id/users', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getUserMappings);
+router.get('/administrators/:administrator_id/report', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.downloadAssessmentReport);
 router.get('/mappings/:mapping_id/result', authenticate, assessmentController.getAssessmentResult);
 router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattempt);
 router.post('/user-mappings/:mapping_id/refresh-violation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.refreshViolation);

@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const XLSX = require('xlsx');
 const Assessment = require('../models/Assessment');
 const AssessmentSegment = require('../models/AssessmentSegment');
 const AssessmentAdministrator = require('../models/AssessmentAdministrator');
@@ -18,6 +19,26 @@ const {
   UserQuestionAssignment,
   ProctoringLog
 } = require('../models/AssessmentConfigs');
+
+const formatLabel = (value) => {
+  if (!value) return '';
+  return value
+    .toString()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+};
+
+const appendConfigSection = (rows, title, config) => {
+  if (!config) return;
+  rows.push([title]);
+  Object.entries(config).forEach(([key, value]) => {
+    if (['id', 'assessment_administrator_id', 'created_at', 'last_updated_at'].includes(key)) {
+      return;
+    }
+    rows.push([formatLabel(key), value !== null && value !== undefined ? value : '']);
+  });
+  rows.push([]);
+};
 
 // =====================================================
 // ASSESSMENT CRUD
@@ -679,6 +700,256 @@ const getUserMappings = async (req, res) => {
   } catch (error) {
     console.error('Error fetching user mappings:', error);
     res.status(500).json({ error: 'Failed to fetch user mappings' });
+  }
+};
+
+/**
+ * Download assessment report (multi-sheet Excel)
+ */
+const downloadAssessmentReport = async (req, res) => {
+  const { administrator_id } = req.params;
+
+  try {
+    const admin = await AssessmentAdministrator.findById(administrator_id);
+    if (!admin) {
+      return res.status(404).json({ error: 'Assessment administrator not found' });
+    }
+
+    const assessment = await Assessment.findById(admin.assessment_id);
+
+    const [mappingRows] = await pool.execute(
+      `SELECT aum.*,
+              u.name as user_name,
+              u.email as user_email,
+              ud.mobile_number as user_phone,
+              (
+                SELECT COUNT(*)
+                FROM assessment_user_mappings aum2
+                WHERE aum2.assessment_administrator_id = aum.assessment_administrator_id
+                  AND aum2.user_id = aum.user_id
+              ) as attempts_taken
+       FROM assessment_user_mappings aum
+       JOIN users u ON aum.user_id = u.id
+       LEFT JOIN user_details ud ON ud.user_id = u.id
+       WHERE aum.assessment_administrator_id = ?
+       ORDER BY u.name ASC`,
+      [administrator_id]
+    );
+
+    const statusCounts = mappingRows.reduce(
+      (acc, row) => {
+        acc.total += 1;
+        acc[row.status] = (acc[row.status] || 0) + 1;
+        return acc;
+      },
+      { total: 0 }
+    );
+
+    const takenCount = ['IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'DISQUALIFIED']
+      .reduce((sum, status) => sum + (statusCounts[status] || 0), 0);
+
+    // Sheet 1: Assessment + Config details
+    const sheet1Rows = [
+      ['Assessment Details'],
+      ['Assessment Title', assessment?.title || admin.assessment_title || ''],
+      ['Assessment Unique ID', assessment?.unique_id || admin.assessment_unique_id || ''],
+      ['Description', assessment?.description || ''],
+      ['Institution', assessment?.institution_name || ''],
+      ['Topic', assessment?.topic_name || ''],
+      [],
+      ['Administrator Details'],
+      ['Display Name', admin.display_name || ''],
+      ['Administrator Unique ID', admin.unique_id || ''],
+      ['Status', admin.status || ''],
+      ['Config Name', admin.config_name || ''],
+      ['Category', admin.category_name || ''],
+      []
+    ];
+
+    appendConfigSection(sheet1Rows, 'Timing Configuration', admin.timing_config);
+    appendConfigSection(sheet1Rows, 'Proctoring Configuration', admin.proctoring_config);
+    appendConfigSection(sheet1Rows, 'Scoring Configuration', admin.scoring_config);
+    appendConfigSection(sheet1Rows, 'Question Configuration', admin.question_config);
+    appendConfigSection(sheet1Rows, 'Access Configuration', admin.access_config);
+
+    sheet1Rows.push(
+      ['User Status Summary'],
+      ['Total Users', statusCounts.total || 0],
+      ['Users Taken Assessment', takenCount],
+      ['Users Invited', statusCounts.INVITED || 0],
+      ['Users Not Started', statusCounts.NOT_STARTED || 0],
+      ['Users In Progress', statusCounts.IN_PROGRESS || 0],
+      ['Users Completed', statusCounts.COMPLETED || 0],
+      ['Users Submitted', statusCounts.SUBMITTED || 0],
+      ['Users Disqualified', statusCounts.DISQUALIFIED || 0]
+    );
+
+    const workbook = XLSX.utils.book_new();
+    const sheet1 = XLSX.utils.aoa_to_sheet(sheet1Rows);
+    sheet1['!cols'] = [{ wch: 35 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(workbook, sheet1, 'Assessment Summary');
+
+    // Sheet 2: User details with segment/question columns
+    const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+    const segmentDetails = [];
+    for (const segment of segments) {
+      const segmentWithQuestions = await AssessmentSegment.getWithQuestions(segment.id);
+      const questions = [
+        ...(segmentWithQuestions?.programming_questions || []).map(q => ({
+          id: q.programming_question_id,
+          type: 'PROGRAMMING',
+          title: q.name || 'Programming Question'
+        })),
+        ...(segmentWithQuestions?.mcq_questions || []).map(q => ({
+          id: q.mcq_question_id,
+          type: 'MCQ',
+          title: q.name || 'MCQ Question'
+        }))
+      ];
+      segmentDetails.push({
+        id: segment.id,
+        name: segment.name,
+        questions
+      });
+    }
+
+    const baseHeaders = [
+      'Name',
+      'Email',
+      'Phone',
+      'Status',
+      'Score (%)',
+      'Attempts Taken',
+      'Segments Attempted'
+    ];
+
+    const headerRow1 = [...baseHeaders];
+    const headerRow2 = baseHeaders.map(() => '');
+    const merges = [];
+    let currentCol = baseHeaders.length;
+
+    baseHeaders.forEach((_, index) => {
+      merges.push({ s: { r: 0, c: index }, e: { r: 1, c: index } });
+    });
+
+    segmentDetails.forEach(segment => {
+      const segmentStartCol = currentCol;
+      const questions = segment.questions;
+      questions.forEach(question => {
+        headerRow1.push(segment.name);
+        const questionLabel = question.type === 'PROGRAMMING'
+          ? `${question.title} (Passed/Total)`
+          : question.title;
+        headerRow2.push(questionLabel);
+        currentCol += 1;
+      });
+      if (questions.length > 0) {
+        merges.push({
+          s: { r: 0, c: segmentStartCol },
+          e: { r: 0, c: currentCol - 1 }
+        });
+      }
+    });
+
+    headerRow1.push('Total Score');
+    headerRow2.push('');
+    merges.push({ s: { r: 0, c: currentCol }, e: { r: 1, c: currentCol } });
+
+    const mappingIds = mappingRows.map(row => row.id);
+    const segmentAttemptMap = {};
+    const mcqSubmissionMap = {};
+    const codeSubmissionMap = {};
+
+    if (mappingIds.length > 0) {
+      const [segmentCounts] = await pool.execute(
+        `SELECT assessment_user_mapping_id, COUNT(DISTINCT assessment_segment_id) as segments_attempted
+         FROM assessment_segment_progress
+         WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})
+           AND status != 'NOT_STARTED'
+         GROUP BY assessment_user_mapping_id`,
+        mappingIds
+      );
+      segmentCounts.forEach(row => {
+        segmentAttemptMap[row.assessment_user_mapping_id] = row.segments_attempted;
+      });
+
+      try {
+        const [mcqRows] = await pool.execute(
+          `SELECT assessment_user_mapping_id, question_id, score, is_correct
+           FROM user_question_submissions
+           WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
+          mappingIds
+        );
+        mcqRows.forEach(row => {
+          const key = `${row.assessment_user_mapping_id}:${row.question_id}`;
+          mcqSubmissionMap[key] = row.score ?? (row.is_correct ? 'Correct' : '');
+        });
+      } catch (error) {
+        if (error.code !== 'ER_NO_SUCH_TABLE') {
+          throw error;
+        }
+      }
+
+      try {
+        const [codeRows] = await pool.execute(
+          `SELECT assessment_user_mapping_id, question_id, test_cases_passed, test_cases_total
+           FROM assessment_code_submissions
+           WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
+          mappingIds
+        );
+        codeRows.forEach(row => {
+          const key = `${row.assessment_user_mapping_id}:${row.question_id}`;
+          const passed = row.test_cases_passed ?? 0;
+          const total = row.test_cases_total ?? 0;
+          codeSubmissionMap[key] = `${passed}/${total}`;
+        });
+      } catch (error) {
+        if (error.code !== 'ER_NO_SUCH_TABLE') {
+          throw error;
+        }
+      }
+    }
+
+    const sheet2Rows = [headerRow1, headerRow2];
+    mappingRows.forEach(row => {
+      const dataRow = [
+        row.user_name || '',
+        row.user_email || '',
+        row.user_phone || '',
+        row.status || '',
+        row.percentage_score !== null && row.percentage_score !== undefined
+          ? Number(row.percentage_score)
+          : '',
+        row.attempts_taken || row.attempt_number || 1,
+        segmentAttemptMap[row.id] || 0
+      ];
+
+      segmentDetails.forEach(segment => {
+        segment.questions.forEach(question => {
+          const key = `${row.id}:${question.id}`;
+          if (question.type === 'PROGRAMMING') {
+            dataRow.push(codeSubmissionMap[key] || '');
+          } else {
+            dataRow.push(mcqSubmissionMap[key] ?? '');
+          }
+        });
+      });
+
+      dataRow.push(row.total_score ?? '');
+      sheet2Rows.push(dataRow);
+    });
+
+    const sheet2 = XLSX.utils.aoa_to_sheet(sheet2Rows);
+    sheet2['!merges'] = merges;
+    XLSX.utils.book_append_sheet(workbook, sheet2, 'User Details');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=assessment-report-${administrator_id}.xlsx`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('Error generating assessment report:', error);
+    res.status(500).json({ error: 'Failed to generate assessment report' });
   }
 };
 
@@ -2231,6 +2502,7 @@ module.exports = {
   // User Mapping
   inviteUsers,
   getUserMappings,
+  downloadAssessmentReport,
   allowReattempt,
   refreshViolation,
   deleteUserMapping,
