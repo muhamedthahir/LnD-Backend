@@ -636,11 +636,14 @@ class AssessmentUserMapping {
    * Fetch random programming questions
    */
   static async fetchRandomProgrammingQuestions(criteria, mapping_id) {
-    let query = 'SELECT id, weightage FROM programming_questions WHERE 1=1';
+    let query = `SELECT pq.id, q.points as weightage
+                 FROM programming_questions pq
+                 JOIN questions q ON pq.question_id = q.id
+                 WHERE 1=1`;
     const params = [];
 
     if (criteria.question_bank_id) {
-      query += ' AND question_bank_id = ?';
+      query += ' AND q.question_bank_id = ?';
       params.push(criteria.question_bank_id);
     }
 
@@ -666,7 +669,7 @@ class AssessmentUserMapping {
         questions.push(...rows.map((q, i) => ({
           question_id: q.id,
           sequence_order: questions.length + i + 1,
-          weightage: q.weightage,
+          weightage: q.weightage || 1,
           is_from_random_fetch: true
         })));
       }
@@ -679,11 +682,14 @@ class AssessmentUserMapping {
    * Fetch random MCQ questions
    */
   static async fetchRandomMCQQuestions(criteria, mapping_id) {
-    let query = 'SELECT id, weightage FROM mcq_multiselect_questions WHERE 1=1';
+    let query = `SELECT mq.id, q.points as weightage
+                 FROM mcq_multiselect_questions mq
+                 JOIN questions q ON mq.question_id = q.id
+                 WHERE 1=1`;
     const params = [];
 
     if (criteria.question_bank_id) {
-      query += ' AND question_bank_id = ?';
+      query += ' AND q.question_bank_id = ?';
       params.push(criteria.question_bank_id);
     }
 
@@ -709,7 +715,7 @@ class AssessmentUserMapping {
         questions.push(...rows.map((q, i) => ({
           question_id: q.id,
           sequence_order: questions.length + i + 1,
-          weightage: q.weightage,
+          weightage: q.weightage || 1,
           is_from_random_fetch: true
         })));
       }
