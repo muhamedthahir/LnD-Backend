@@ -180,6 +180,41 @@ class AssessmentAdministrator {
          accessConfig.ip_restriction || null]
       );
 
+      // Create random fetch criteria if enabled
+      if (questionConfig.fetch_random_question && questionConfig.segment_questions) {
+        const AssessmentSegment = require('./AssessmentSegment');
+        const segments = await AssessmentSegment.getByAssessmentId(assessment_id);
+
+        for (const segment of segments) {
+          const segmentQ = questionConfig.segment_questions[segment.id];
+          if (segmentQ && segmentQ.total > 0) {
+            const [[programmingCount]] = await connection.execute(
+              'SELECT COUNT(*) as total FROM segment_programming_questions WHERE assessment_segment_id = ?',
+              [segment.id]
+            );
+            const [[mcqCount]] = await connection.execute(
+              'SELECT COUNT(*) as total FROM segment_mcq_questions WHERE assessment_segment_id = ?',
+              [segment.id]
+            );
+            const questionType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
+            await connection.execute(
+              `INSERT INTO random_fetch_criteria 
+               (assessment_segment_id, question_type, question_bank_id, total_questions, easy_count, medium_count, hard_count, is_active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)`,
+              [
+                segment.id,
+                questionType,
+                segmentQ.question_bank_id || null,
+                segmentQ.total || 0,
+                segmentQ.easy || 0,
+                segmentQ.medium || 0,
+                segmentQ.hard || 0
+              ]
+            );
+          }
+        }
+      }
+
       await connection.commit();
 
       return {
@@ -263,8 +298,11 @@ class AssessmentAdministrator {
             acc.easy = (acc.easy || 0) + (c.easy_count || 0);
             acc.medium = (acc.medium || 0) + (c.medium_count || 0);
             acc.hard = (acc.hard || 0) + (c.hard_count || 0);
+            if (!acc.question_bank_id && c.question_bank_id) {
+              acc.question_bank_id = c.question_bank_id;
+            }
             return acc;
-          }, { total: 0, easy: 0, medium: 0, hard: 0 });
+          }, { total: 0, easy: 0, medium: 0, hard: 0, question_bank_id: null });
           
           segmentQuestions[segment.id] = aggregated;
         }
@@ -526,24 +564,49 @@ class AssessmentAdministrator {
                 );
                 
                 if (existingCriteria.length > 0) {
-                  // Update existing criteria (update the first one, or we could aggregate)
-                  await connection.execute(
-                    `UPDATE random_fetch_criteria SET
-                       total_questions = ?,
-                       easy_count = ?,
-                       medium_count = ?,
-                       hard_count = ?
-                     WHERE id = ?`,
-                    [segmentQ.total || 0, segmentQ.easy || 0, segmentQ.medium || 0, segmentQ.hard || 0, existingCriteria[0].id]
-                  );
+                  // Update existing criteria for this segment
+                  for (const criteriaRow of existingCriteria) {
+                    await connection.execute(
+                      `UPDATE random_fetch_criteria SET
+                         question_bank_id = ?,
+                         total_questions = ?,
+                         easy_count = ?,
+                         medium_count = ?,
+                         hard_count = ?
+                       WHERE id = ?`,
+                      [
+                        segmentQ.question_bank_id || null,
+                        segmentQ.total || 0,
+                        segmentQ.easy || 0,
+                        segmentQ.medium || 0,
+                        segmentQ.hard || 0,
+                        criteriaRow.id
+                      ]
+                    );
+                  }
                 } else {
-                  // Create new criteria for both PROGRAMMING and MCQ (or create combined)
-                  // For simplicity, create one criteria that applies to both types
+                  const [[programmingCount]] = await connection.execute(
+                    'SELECT COUNT(*) as total FROM segment_programming_questions WHERE assessment_segment_id = ?',
+                    [segment.id]
+                  );
+                  const [[mcqCount]] = await connection.execute(
+                    'SELECT COUNT(*) as total FROM segment_mcq_questions WHERE assessment_segment_id = ?',
+                    [segment.id]
+                  );
+                  const questionType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
                   await connection.execute(
                     `INSERT INTO random_fetch_criteria 
-                     (assessment_segment_id, question_type, total_questions, easy_count, medium_count, hard_count, is_active)
-                     VALUES (?, 'ALL', ?, ?, ?, ?, TRUE)`,
-                    [segment.id, segmentQ.total || 0, segmentQ.easy || 0, segmentQ.medium || 0, segmentQ.hard || 0]
+                     (assessment_segment_id, question_type, question_bank_id, total_questions, easy_count, medium_count, hard_count, is_active)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)`,
+                    [
+                      segment.id,
+                      questionType,
+                      segmentQ.question_bank_id || null,
+                      segmentQ.total || 0,
+                      segmentQ.easy || 0,
+                      segmentQ.medium || 0,
+                      segmentQ.hard || 0
+                    ]
                   );
                 }
               } else {
