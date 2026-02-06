@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS users (
   degree VARCHAR(255) NULL,
   otp VARCHAR(10) NULL,
   otp_expires_at TIMESTAMP NULL,
+  reset_token VARCHAR(255) NULL,
+  reset_token_expires_at TIMESTAMP NULL,
   password_set BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -46,7 +48,8 @@ CREATE TABLE IF NOT EXISTS users (
   INDEX idx_college_name (college_name),
   INDEX idx_roll_number (roll_number),
   INDEX idx_department (department),
-  INDEX idx_otp (otp)
+  INDEX idx_otp (otp),
+  INDEX idx_reset_token (reset_token)
 );
 
 -- Courses table

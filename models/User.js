@@ -126,6 +126,73 @@ class User {
     }
   }
 
+  static async ensureResetColumns() {
+    const columnsToAdd = [
+      { name: 'reset_token', definition: 'VARCHAR(255) NULL' },
+      { name: 'reset_token_expires_at', definition: 'TIMESTAMP NULL' }
+    ];
+
+    for (const col of columnsToAdd) {
+      try {
+        await pool.execute(`ALTER TABLE users ADD COLUMN ${col.name} ${col.definition}`);
+        console.log(`Added column ${col.name} to users`);
+      } catch (error) {
+        // Ignore if column already exists
+      }
+    }
+
+    try {
+      await pool.execute('ALTER TABLE users ADD INDEX idx_reset_token (reset_token)');
+    } catch (error) {
+      // Ignore if index already exists
+    }
+  }
+
+  static async setResetToken(userId, resetToken, resetTokenExpiresAt) {
+    try {
+      await this.ensureResetColumns();
+      const [result] = await pool.execute(
+        'UPDATE users SET reset_token = ?, reset_token_expires_at = ? WHERE id = ?',
+        [resetToken, resetTokenExpiresAt, userId]
+      );
+      return result.affectedRows > 0;
+    } catch (error) {
+      console.error('Error setting reset token:', error);
+      throw error;
+    }
+  }
+
+  static async findByResetToken(email, resetToken) {
+    try {
+      await this.ensureResetColumns();
+      const [rows] = await pool.execute(
+        'SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_token_expires_at > NOW()',
+        [email, resetToken]
+      );
+      return rows[0] || null;
+    } catch (error) {
+      if (error.code === 'ER_BAD_FIELD_ERROR') {
+        console.warn('Reset token columns missing. Please run migration.');
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  static async clearResetToken(userId) {
+    try {
+      await this.ensureResetColumns();
+      const [result] = await pool.execute(
+        'UPDATE users SET reset_token = NULL, reset_token_expires_at = NULL WHERE id = ?',
+        [userId]
+      );
+      return result.affectedRows > 0;
+    } catch (error) {
+      console.error('Error clearing reset token:', error);
+      throw error;
+    }
+  }
+
   static async findByEmail(email) {
     try {
       // Try to select all columns, but handle missing columns gracefully

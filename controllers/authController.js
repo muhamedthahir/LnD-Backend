@@ -1,9 +1,11 @@
 const User = require('../models/User');
 const RefreshToken = require('../models/RefreshToken');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const { generateTokens, generateAccessToken, verifyAccessToken, extractToken } = require('../utils/jwt');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmail } = require('../utils/emailService');
+const { sendTemplateEmail } = require('../services/sesEmailService');
 
 class AuthController {
   static async register(req, res) {
@@ -219,6 +221,81 @@ class AuthController {
       });
     } catch (error) {
       console.error('Set password error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  static async forgotPassword(req, res) {
+    try {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).json({ error: 'Email is required' });
+      }
+
+      const user = await User.findByEmail(email);
+
+      if (user) {
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+        await User.setResetToken(user.id, resetToken, expiresAt);
+
+        const baseUrl = process.env.FRONTEND_URL || req.headers.origin || '';
+        const resetLink = `${baseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
+
+        const emailResult = await sendTemplateEmail({
+          templateUniqueId: 'reset-password',
+          to: email,
+          variables: {
+            name: user.name || '',
+            email,
+            reset_link: resetLink
+          },
+          userId: user.id
+        });
+
+        if (!emailResult.success) {
+          return res.status(500).json({ error: emailResult.error || 'Failed to send reset email' });
+        }
+      }
+
+      return res.json({
+        message: 'If the email exists, a reset link has been sent.'
+      });
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  static async resetPassword(req, res) {
+    try {
+      const { email, token, newPassword, confirmPassword } = req.body;
+
+      if (!email || !token || !newPassword || !confirmPassword) {
+        return res.status(400).json({ error: 'Email, token, and passwords are required' });
+      }
+
+      if (newPassword.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      }
+
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({ error: 'Passwords do not match' });
+      }
+
+      const user = await User.findByResetToken(email, token);
+      if (!user) {
+        return res.status(400).json({ error: 'Invalid or expired reset token' });
+      }
+
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await User.setPassword(user.id, hashedPassword);
+      await User.clearResetToken(user.id);
+
+      res.json({ message: 'Password reset successfully. You can now login.' });
+    } catch (error) {
+      console.error('Reset password error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   }
