@@ -167,7 +167,9 @@ class MCQSubmission {
     // Ensure status enum includes 'attempted'
     await this.ensureAssessmentColumns();
 
-    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id);
+    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id, {
+      practice_segment_id
+    });
     if (existing) return existing.id;
 
     // Create base submission first
@@ -231,6 +233,8 @@ class MCQSubmission {
       course_id,
       mcq_question_id,
       practice_segment_id,
+      assessment_segment_id,
+      assessment_user_mapping_id,
       selected_options,
       correct_options,
       is_correct = false,
@@ -240,7 +244,11 @@ class MCQSubmission {
     } = data;
     
     // Check if submission exists
-    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id);
+    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id, {
+      practice_segment_id,
+      assessment_segment_id,
+      assessment_user_mapping_id
+    });
     
     if (existing) {
       // Determine if this is the best submission
@@ -296,12 +304,14 @@ class MCQSubmission {
       const [result] = await pool.execute(
         `INSERT INTO mcq_submissions 
          (submission_id, user_id, mcq_question_id, practice_segment_id,
-          status, last_selected_options, best_selected_options, correct_options,
+          assessment_segment_id, assessment_user_mapping_id, status,
+          last_selected_options, best_selected_options, correct_options,
           is_correct, best_score, last_score, max_score, attempt_count,
           total_time_spent_seconds, first_answered_at, last_answered_at)
-         VALUES (?, ?, ?, ?, 'answered', ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'answered', ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [
           submissionId, user_id, mcq_question_id, practice_segment_id,
+          assessment_segment_id, assessment_user_mapping_id,
           JSON.stringify(selected_options), JSON.stringify(selected_options), JSON.stringify(correct_options),
           is_correct, score, score, max_score,
           time_spent_seconds
@@ -347,7 +357,9 @@ class MCQSubmission {
    * Mark question as skipped
    */
   static async markSkipped(user_id, mcq_question_id, course_id, practice_segment_id) {
-    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id);
+    const existing = await this.findByUserAndQuestion(user_id, mcq_question_id, {
+      practice_segment_id
+    });
     
     if (existing) {
       await pool.execute(
@@ -387,10 +399,31 @@ class MCQSubmission {
   /**
    * Find by user and question
    */
-  static async findByUserAndQuestion(user_id, mcq_question_id) {
+  static async findByUserAndQuestion(user_id, mcq_question_id, options = {}) {
+    const {
+      practice_segment_id = null,
+      assessment_segment_id = null,
+      assessment_user_mapping_id = null
+    } = options;
+    const conditions = ['user_id = ?', 'mcq_question_id = ?'];
+    const params = [user_id, mcq_question_id];
+
+    if (practice_segment_id !== null && practice_segment_id !== undefined) {
+      conditions.push('practice_segment_id = ?');
+      params.push(practice_segment_id);
+    }
+    if (assessment_segment_id !== null && assessment_segment_id !== undefined) {
+      conditions.push('assessment_segment_id = ?');
+      params.push(assessment_segment_id);
+    }
+    if (assessment_user_mapping_id !== null && assessment_user_mapping_id !== undefined) {
+      conditions.push('assessment_user_mapping_id = ?');
+      params.push(assessment_user_mapping_id);
+    }
+
     const [rows] = await pool.execute(
-      'SELECT * FROM mcq_submissions WHERE user_id = ? AND mcq_question_id = ?',
-      [user_id, mcq_question_id]
+      `SELECT * FROM mcq_submissions WHERE ${conditions.join(' AND ')}`,
+      params
     );
     return rows[0] || null;
   }

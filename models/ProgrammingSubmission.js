@@ -187,7 +187,9 @@ class ProgrammingSubmission {
     // Ensure status enum includes 'attempted'
     await this.ensureAssessmentColumns();
 
-    const existing = await this.findByUserAndQuestion(user_id, programming_question_id);
+    const existing = await this.findByUserAndQuestion(user_id, programming_question_id, {
+      practice_segment_id
+    });
     if (existing) return existing.id;
 
     // Create base submission first
@@ -251,6 +253,8 @@ class ProgrammingSubmission {
       course_id,
       programming_question_id,
       practice_segment_id,
+      assessment_segment_id,
+      assessment_user_mapping_id,
       submitted_code,
       language_used,
       status = 'pending',
@@ -264,7 +268,11 @@ class ProgrammingSubmission {
     } = data;
     
     // Check if submission exists
-    const existing = await this.findByUserAndQuestion(user_id, programming_question_id);
+    const existing = await this.findByUserAndQuestion(user_id, programming_question_id, {
+      practice_segment_id,
+      assessment_segment_id,
+      assessment_user_mapping_id
+    });
     
     const successful = test_cases_total > 0 && test_cases_passed === test_cases_total;
     
@@ -335,14 +343,16 @@ class ProgrammingSubmission {
       const [result] = await pool.execute(
         `INSERT INTO programming_submissions 
          (submission_id, user_id, programming_question_id, practice_segment_id,
-          status, best_submitted_code, last_submitted_code, language_used,
+          assessment_segment_id, assessment_user_mapping_id, status,
+          best_submitted_code, last_submitted_code, language_used,
           submission_count, successful_submission, best_test_cases_passed,
           last_test_cases_passed, test_cases_total, best_score, last_score, max_score,
           first_submitted_at, last_submitted_at, best_submitted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [
           submissionId, user_id, programming_question_id, practice_segment_id,
-          status, submitted_code, submitted_code, language_used,
+          assessment_segment_id, assessment_user_mapping_id, status,
+          submitted_code, submitted_code, language_used,
           successful, test_cases_passed, test_cases_passed, test_cases_total,
           score, score, max_score
         ]
@@ -446,10 +456,31 @@ class ProgrammingSubmission {
   /**
    * Find by user and question
    */
-  static async findByUserAndQuestion(user_id, programming_question_id) {
+  static async findByUserAndQuestion(user_id, programming_question_id, options = {}) {
+    const {
+      practice_segment_id = null,
+      assessment_segment_id = null,
+      assessment_user_mapping_id = null
+    } = options;
+    const conditions = ['user_id = ?', 'programming_question_id = ?'];
+    const params = [user_id, programming_question_id];
+
+    if (practice_segment_id !== null && practice_segment_id !== undefined) {
+      conditions.push('practice_segment_id = ?');
+      params.push(practice_segment_id);
+    }
+    if (assessment_segment_id !== null && assessment_segment_id !== undefined) {
+      conditions.push('assessment_segment_id = ?');
+      params.push(assessment_segment_id);
+    }
+    if (assessment_user_mapping_id !== null && assessment_user_mapping_id !== undefined) {
+      conditions.push('assessment_user_mapping_id = ?');
+      params.push(assessment_user_mapping_id);
+    }
+
     const [rows] = await pool.execute(
-      'SELECT * FROM programming_submissions WHERE user_id = ? AND programming_question_id = ?',
-      [user_id, programming_question_id]
+      `SELECT * FROM programming_submissions WHERE ${conditions.join(' AND ')}`,
+      params
     );
     return rows[0] || null;
   }

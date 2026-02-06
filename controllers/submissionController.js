@@ -326,7 +326,11 @@ class SubmissionController {
       await ProgressService.updateProgrammingProgress(user_id, practice_segment_id);
       
       // Get updated submission
-      const submission = await ProgrammingSubmission.findByUserAndQuestion(user_id, programming_question_id);
+      const submission = await ProgrammingSubmission.findByUserAndQuestion(
+        user_id,
+        programming_question_id,
+        { practice_segment_id }
+      );
       
       res.json({
         success: true,
@@ -436,7 +440,11 @@ class SubmissionController {
         : 0;
       
       // Get updated submission
-      const submission = await MCQSubmission.findByUserAndQuestion(user_id, mcq_question_id);
+      const submission = await MCQSubmission.findByUserAndQuestion(
+        user_id,
+        mcq_question_id,
+        { practice_segment_id }
+      );
       
       res.json({
         success: true,
@@ -525,7 +533,20 @@ class SubmissionController {
       const { questionId } = req.params;
       const user_id = req.user.id;
       
-      const submission = await ProgrammingSubmission.findByUserAndQuestion(user_id, parseInt(questionId));
+      const {
+        practice_segment_id,
+        assessment_segment_id,
+        assessment_user_mapping_id
+      } = req.query;
+      const submission = await ProgrammingSubmission.findByUserAndQuestion(
+        user_id,
+        parseInt(questionId),
+        {
+          practice_segment_id: practice_segment_id ? parseInt(practice_segment_id) : null,
+          assessment_segment_id: assessment_segment_id ? parseInt(assessment_segment_id) : null,
+          assessment_user_mapping_id: assessment_user_mapping_id ? parseInt(assessment_user_mapping_id) : null
+        }
+      );
       
       if (!submission) {
         return res.json({ submission: null, history: [] });
@@ -549,7 +570,20 @@ class SubmissionController {
       const { questionId } = req.params;
       const user_id = req.user.id;
       
-      const submission = await MCQSubmission.findByUserAndQuestion(user_id, parseInt(questionId));
+      const {
+        practice_segment_id,
+        assessment_segment_id,
+        assessment_user_mapping_id
+      } = req.query;
+      const submission = await MCQSubmission.findByUserAndQuestion(
+        user_id,
+        parseInt(questionId),
+        {
+          practice_segment_id: practice_segment_id ? parseInt(practice_segment_id) : null,
+          assessment_segment_id: assessment_segment_id ? parseInt(assessment_segment_id) : null,
+          assessment_user_mapping_id: assessment_user_mapping_id ? parseInt(assessment_user_mapping_id) : null
+        }
+      );
       
       if (!submission) {
         return res.json({ submission: null, history: [] });
