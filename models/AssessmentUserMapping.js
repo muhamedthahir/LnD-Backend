@@ -636,6 +636,14 @@ class AssessmentUserMapping {
    * Fetch random programming questions
    */
   static async fetchRandomProgrammingQuestions(criteria, mapping_id) {
+    const [levels] = await pool.execute(
+      "SELECT id, LOWER(name) as name FROM levels WHERE LOWER(name) IN ('easy','medium','hard')"
+    );
+    const levelMap = levels.reduce((acc, level) => {
+      acc[level.name] = level.id;
+      return acc;
+    }, {});
+
     let query = `SELECT pq.id, q.points as weightage
                  FROM programming_questions pq
                  JOIN questions q ON pq.question_id = q.id
@@ -663,9 +671,11 @@ class AssessmentUserMapping {
     
     // Fetch by difficulty
     for (const [difficulty, count] of [['easy', criteria.easy_count], ['medium', criteria.medium_count], ['hard', criteria.hard_count]]) {
+      const levelId = levelMap[difficulty];
+      if (!levelId) continue;
       if (count > 0) {
-        const diffQuery = query + ` AND difficulty = ? ORDER BY RAND() LIMIT ${count}`;
-        const [rows] = await pool.execute(diffQuery, [...params, difficulty]);
+        const diffQuery = query + ` AND q.level_id = ? ORDER BY RAND() LIMIT ${count}`;
+        const [rows] = await pool.execute(diffQuery, [...params, levelId]);
         questions.push(...rows.map((q, i) => ({
           question_id: q.id,
           sequence_order: questions.length + i + 1,
@@ -682,6 +692,14 @@ class AssessmentUserMapping {
    * Fetch random MCQ questions
    */
   static async fetchRandomMCQQuestions(criteria, mapping_id) {
+    const [levels] = await pool.execute(
+      "SELECT id, LOWER(name) as name FROM levels WHERE LOWER(name) IN ('easy','medium','hard')"
+    );
+    const levelMap = levels.reduce((acc, level) => {
+      acc[level.name] = level.id;
+      return acc;
+    }, {});
+
     let query = `SELECT mq.id, q.points as weightage
                  FROM mcq_multiselect_questions mq
                  JOIN questions q ON mq.question_id = q.id
@@ -709,9 +727,11 @@ class AssessmentUserMapping {
     
     // Fetch by difficulty
     for (const [difficulty, count] of [['easy', criteria.easy_count], ['medium', criteria.medium_count], ['hard', criteria.hard_count]]) {
+      const levelId = levelMap[difficulty];
+      if (!levelId) continue;
       if (count > 0) {
-        const diffQuery = query + ` AND difficulty = ? ORDER BY RAND() LIMIT ${count}`;
-        const [rows] = await pool.execute(diffQuery, [...params, difficulty]);
+        const diffQuery = query + ` AND q.level_id = ? ORDER BY RAND() LIMIT ${count}`;
+        const [rows] = await pool.execute(diffQuery, [...params, levelId]);
         questions.push(...rows.map((q, i) => ({
           question_id: q.id,
           sequence_order: questions.length + i + 1,
