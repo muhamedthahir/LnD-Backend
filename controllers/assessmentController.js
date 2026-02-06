@@ -1286,11 +1286,23 @@ const getStartInfo = async (req, res) => {
 
     // Calculate total questions
     let totalQuestions = 0;
-    segments.forEach(segment => {
-      const progCount = segment.programming_question_count || 0;
-      const mcqCount = segment.mcq_question_count || 0;
-      totalQuestions += progCount + mcqCount;
-    });
+    const segmentQuestionCounts = {};
+    if (admin.question_config?.fetch_random_question) {
+      for (const segment of segments) {
+        const criteria = await RandomFetchCriteria.findBySegmentId(segment.id);
+        const segmentTotal = (criteria || []).reduce((sum, c) => sum + (c.total_questions || 0), 0);
+        segmentQuestionCounts[segment.id] = segmentTotal;
+        totalQuestions += segmentTotal;
+      }
+    } else {
+      segments.forEach(segment => {
+        const progCount = segment.programming_question_count || 0;
+        const mcqCount = segment.mcq_question_count || 0;
+        const segmentTotal = progCount + mcqCount;
+        segmentQuestionCounts[segment.id] = segmentTotal;
+        totalQuestions += segmentTotal;
+      });
+    }
 
     // Build response
     const response = {
@@ -1317,7 +1329,7 @@ const getStartInfo = async (req, res) => {
         id: segment.id,
         name: segment.name,
         segment_duration: segment.segment_duration,
-        question_count: (segment.programming_question_count || 0) + (segment.mcq_question_count || 0)
+        question_count: segmentQuestionCounts[segment.id] || 0
       }))
     };
 
