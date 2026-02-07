@@ -84,24 +84,43 @@ class Segment {
     const segment = await this.findById(id);
     if (!segment) return null;
 
-    const [concepts] = await pool.execute(
-      'SELECT * FROM concepts WHERE segment_id = ? ORDER BY order_index',
-      [id]
-    );
+    let conceptsData = [];
+    let inclassPractice = [];
+    let postclassPractice = [];
 
-    const [inclassPractice] = await pool.execute(
-      'SELECT * FROM inclass_practice WHERE segment_id = ? ORDER BY order_index',
-      [id]
-    );
+    try {
+      const [c] = await pool.execute(
+        'SELECT * FROM concepts WHERE segment_id = ? ORDER BY order_index',
+        [id]
+      );
+      conceptsData = c;
+    } catch (err) {
+      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+    }
 
-    const [postclassPractice] = await pool.execute(
-      'SELECT * FROM postclass_practice WHERE segment_id = ? ORDER BY order_index',
-      [id]
-    );
+    try {
+      const [i] = await pool.execute(
+        'SELECT * FROM inclass_practice WHERE segment_id = ? ORDER BY order_index',
+        [id]
+      );
+      inclassPractice = i;
+    } catch (err) {
+      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+    }
+
+    try {
+      const [p] = await pool.execute(
+        'SELECT * FROM postclass_practice WHERE segment_id = ? ORDER BY order_index',
+        [id]
+      );
+      postclassPractice = p;
+    } catch (err) {
+      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+    }
 
     return {
       ...segment,
-      concepts,
+      concepts: conceptsData,
       inclass_practice: inclassPractice,
       postclass_practice: postclassPractice
     };
