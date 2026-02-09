@@ -938,7 +938,8 @@ class AdministrationController {
     }
   }
   /**
-   * Get overall report for an administration (practice segments only)
+   * Get overall report for an administration (lessons + practice segments)
+   * Includes lesson segments (video, audio, document, text) and practice segments.
    * Columns: rank, name, email, status, college, group, degree, department, class, section,
    * segment summary (total, in_progress, completed, completion %), segment-wise %, question-wise %
    */
@@ -956,6 +957,16 @@ class AdministrationController {
       }
 
       const courseId = administration.course_id;
+
+      const lessonTypeLabel = (segmentType) => {
+        if (!segmentType) return 'Lesson';
+        const t = String(segmentType).toLowerCase();
+        if (t === 'lesson_video') return 'Video';
+        if (t === 'lesson_audio') return 'Audio';
+        if (t === 'lesson_document') return 'Document';
+        if (t === 'lesson_text') return 'Text';
+        return segmentType.replace(/_/g, ' ');
+      };
 
       // Enrolled users with user details
       const [enrolledRows] = await pool.execute(
@@ -990,7 +1001,32 @@ class AdministrationController {
         });
       }
 
-      // Practice segments for this course (only practice, not lesson/assessment)
+      // Overall completion % from user_courses (same as UI progress bar)
+      const userIds = enrolledRows.map(r => r.user_id);
+      const overallPctByUser = {};
+      if (userIds.length > 0) {
+        const [ucRows] = await pool.execute(
+          `SELECT user_id, progress_percentage
+           FROM user_courses
+           WHERE course_id = ? AND user_id IN (${userIds.map(() => '?').join(',')})`,
+          [courseId, ...userIds]
+        );
+        ucRows.forEach(row => {
+          overallPctByUser[row.user_id] = row.progress_percentage != null ? Number(row.progress_percentage) : 0;
+        });
+      }
+
+      // Lesson segments (video, audio, document, text) for this course
+      const [lessonSegments] = await pool.execute(
+        `SELECT s.id, s.name, s.segment_type, s.topic_id, s.order_index, t.order_index as topic_order
+         FROM segments s
+         JOIN topics t ON t.id = s.topic_id
+         WHERE t.course_id = ?
+         ORDER BY t.order_index, s.order_index, s.id`,
+        [courseId]
+      );
+
+      // Practice segments for this course
       const [practiceSegments] = await pool.execute(
         `SELECT ps.id, ps.name, ps.topic_id, t.order_index as topic_order
          FROM practice_segments ps
@@ -1000,7 +1036,9 @@ class AdministrationController {
         [courseId]
       );
 
-      if (practiceSegments.length === 0) {
+      const totalSegmentCount = lessonSegments.length + practiceSegments.length;
+
+      if (totalSegmentCount === 0) {
         const rows = enrolledRows.map((u, idx) => ({
           rank: idx + 1,
           name: u.user_name,
@@ -1025,55 +1063,67 @@ class AdministrationController {
         });
       }
 
-      const segmentIds = practiceSegments.map(s => s.id);
+      const practiceSegmentIds = practiceSegments.map(s => s.id);
 
-      // User segment progress (practice only)
-      const [segmentProgressRows] = await pool.execute(
-        `SELECT user_id, practice_segment_id, status, progress_percentage, items_completed, items_total
-         FROM user_segment_progress
-         WHERE course_id = ? AND practice_segment_id IS NOT NULL AND practice_segment_id IN (${segmentIds.map(() => '?').join(',')})`,
-        [courseId, ...segmentIds]
-      );
+      // User segment progress: lessons (segment_id) and practice (practice_segment_id)
+      const progressQuery = practiceSegmentIds.length
+        ? `SELECT user_id, segment_id, practice_segment_id, status, progress_percentage, items_completed, items_total
+           FROM user_segment_progress
+           WHERE course_id = ? AND (practice_segment_id IN (${practiceSegmentIds.map(() => '?').join(',')}) OR segment_id IS NOT NULL)`
+        : `SELECT user_id, segment_id, practice_segment_id, status, progress_percentage, items_completed, items_total
+           FROM user_segment_progress
+           WHERE course_id = ? AND segment_id IS NOT NULL`;
+      const progressParams = practiceSegmentIds.length ? [courseId, ...practiceSegmentIds] : [courseId];
+      const [segmentProgressRows] = await pool.execute(progressQuery, progressParams);
       const progressByUser = {};
       segmentProgressRows.forEach(sp => {
         if (!progressByUser[sp.user_id]) progressByUser[sp.user_id] = {};
-        progressByUser[sp.user_id][sp.practice_segment_id] = sp;
+        const key = sp.practice_segment_id != null ? sp.practice_segment_id : `L${sp.segment_id}`;
+        progressByUser[sp.user_id][key] = sp;
       });
 
-      // Programming submissions (user_id, practice_segment_id, question_id = programming_question_id, completed)
-      const [progSubs] = await pool.execute(
-        `SELECT ps.user_id, ps.practice_segment_id, ps.programming_question_id as question_id,
-                ps.successful_submission, ps.best_score, ps.max_score
-         FROM programming_submissions ps
-         WHERE ps.user_id IN (${enrolledRows.map(() => '?').join(',')}) AND ps.practice_segment_id IN (${segmentIds.map(() => '?').join(',')})`,
-        [...enrolledRows.map(r => r.user_id), ...segmentIds]
-      );
-      const progByUser = {};
-      progSubs.forEach(p => {
-        const key = `${p.user_id}_${p.practice_segment_id}_${p.question_id}`;
-        const pct = p.max_score > 0 ? Math.round((Number(p.best_score) / Number(p.max_score)) * 100) : (p.successful_submission ? 100 : 0);
-        progByUser[key] = Math.min(100, pct);
-      });
+      // Programming submissions (practice only)
+      let progByUser = {};
+      let mcqByUser = {};
+      if (practiceSegmentIds.length > 0) {
+        const [progSubs] = await pool.execute(
+          `SELECT ps.user_id, ps.practice_segment_id, ps.programming_question_id as question_id,
+                  ps.successful_submission, ps.best_score, ps.max_score
+           FROM programming_submissions ps
+           WHERE ps.user_id IN (${enrolledRows.map(() => '?').join(',')}) AND ps.practice_segment_id IN (${practiceSegmentIds.map(() => '?').join(',')})`,
+          [...enrolledRows.map(r => r.user_id), ...practiceSegmentIds]
+        );
+        progSubs.forEach(p => {
+          const key = `${p.user_id}_${p.practice_segment_id}_${p.question_id}`;
+          const pct = p.max_score > 0 ? Math.round((Number(p.best_score) / Number(p.max_score)) * 100) : (p.successful_submission ? 100 : 0);
+          progByUser[key] = Math.min(100, pct);
+        });
 
-      // MCQ submissions (user_id, practice_segment_id, mcq_question_id = question_id, is_correct, score)
-      const [mcqSubs] = await pool.execute(
-        `SELECT ms.user_id, ms.practice_segment_id, ms.mcq_question_id as question_id,
-                ms.is_correct, ms.best_score, ms.max_score
-         FROM mcq_submissions ms
-         WHERE ms.user_id IN (${enrolledRows.map(() => '?').join(',')}) AND ms.practice_segment_id IN (${segmentIds.map(() => '?').join(',')})`,
-        [...enrolledRows.map(r => r.user_id), ...segmentIds]
-      );
-      const mcqByUser = {};
-      mcqSubs.forEach(m => {
-        const key = `${m.user_id}_${m.practice_segment_id}_${m.question_id}`;
-        const pct = m.max_score > 0 ? Math.round((Number(m.best_score) / Number(m.max_score)) * 100) : (m.is_correct ? 100 : 0);
-        mcqByUser[key] = Math.min(100, pct);
-      });
+        const [mcqSubs] = await pool.execute(
+          `SELECT ms.user_id, ms.practice_segment_id, ms.mcq_question_id as question_id,
+                  ms.is_correct, ms.best_score, ms.max_score
+           FROM mcq_submissions ms
+           WHERE ms.user_id IN (${enrolledRows.map(() => '?').join(',')}) AND ms.practice_segment_id IN (${practiceSegmentIds.map(() => '?').join(',')})`,
+          [...enrolledRows.map(r => r.user_id), ...practiceSegmentIds]
+        );
+        mcqSubs.forEach(m => {
+          const key = `${m.user_id}_${m.practice_segment_id}_${m.question_id}`;
+          const pct = m.max_score > 0 ? Math.round((Number(m.best_score) / Number(m.max_score)) * 100) : (m.is_correct ? 100 : 0);
+          mcqByUser[key] = Math.min(100, pct);
+        });
+      }
+
+      // Segment headers: lessons first (with type: Video/Audio/Document/Text), then practice
+      const segmentHeaders = [
+        ...lessonSegments.map(seg => ({
+          id: `L${seg.id}`,
+          name: `${seg.name} (${lessonTypeLabel(seg.segment_type)})`
+        })),
+        ...practiceSegments.map(seg => ({ id: seg.id, name: seg.name }))
+      ];
 
       // Question headers: all questions per practice segment (programming + mcq)
       const questionHeaders = [];
-      const segmentHeaders = practiceSegments.map(seg => ({ id: seg.id, name: seg.name }));
-
       for (const seg of practiceSegments) {
         const [progQ] = await pool.execute(
           `SELECT q.id, q.name FROM practice_segment_programming_questions pspq
@@ -1093,11 +1143,22 @@ class AdministrationController {
 
       const rows = enrolledRows.map((u, idx) => {
         const userProgress = progressByUser[u.user_id] || {};
-        let totalSegments = practiceSegments.length;
+        const totalSegments = totalSegmentCount;
         let inProgress = 0;
         let completed = 0;
         const segmentPcts = {};
         const questionPcts = {};
+
+        lessonSegments.forEach(seg => {
+          const key = `L${seg.id}`;
+          const sp = userProgress[key];
+          const pct = sp ? (sp.progress_percentage != null ? Number(sp.progress_percentage) : 0) : 0;
+          segmentPcts[key] = pct;
+          if (sp) {
+            if (sp.status === 'completed') completed++;
+            else if (sp.status === 'in_progress') inProgress++;
+          }
+        });
 
         practiceSegments.forEach(seg => {
           const sp = userProgress[seg.id];
@@ -1109,7 +1170,10 @@ class AdministrationController {
           }
         });
 
-        const completionPct = totalSegments > 0 ? Math.round((completed / totalSegments) * 100) : 0;
+        // Use overall completion % from user_courses (same as UI progress bar); fallback to segment-based if not set
+        const completionPct = overallPctByUser[u.user_id] != null
+          ? Math.round(Number(overallPctByUser[u.user_id]))
+          : (totalSegments > 0 ? Math.round((completed / totalSegments) * 100) : 0);
 
         questionHeaders.forEach(qh => {
           const key = `${u.user_id}_${qh.segmentId}_${qh.questionId}`;
