@@ -11,7 +11,7 @@ const pool = require('../config/db');
 
 const EMAIL = 'mdfaridh142002@gmail.com';
 const PASSWORD = 'Faridh@sv1';
-const NAME = 'SkillVantix Admin';
+const NAME = 'Mohammed Faridh';
 const ROLE = 'skillvantix_admin';
 
 async function seed() {

@@ -14,7 +14,7 @@ const pool = require('../config/db');
 
 const EMAIL = 'mdfaridh142002@gmail.com';
 const PASSWORD = 'Faridh@sv1';
-const NAME = 'SkillVantix Admin';
+const NAME = 'Mohammed Faridh';
 const ROLE = 'skillvantix_admin';
 
 async function run() {
@@ -29,8 +29,8 @@ async function run() {
 
     if (rows.length > 0) {
       await pool.execute(
-        'UPDATE users SET password = ?, password_set = TRUE, role = ? WHERE email = ?',
-        [hashedPassword, ROLE, EMAIL]
+        'UPDATE users SET name = ?, password = ?, password_set = TRUE, role = ? WHERE email = ?',
+        [NAME, hashedPassword, ROLE, EMAIL]
       );
       console.log('Password and role updated for:', EMAIL);
       console.log('You can now log in with this email and password.');
