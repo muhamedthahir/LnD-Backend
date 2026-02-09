@@ -27,39 +27,45 @@ UserDetails.createTable().catch(err => {
   console.error('Error creating user details table:', err);
 });
 
-const app = express();   
+const app = express();
+
+// Shared allowed origins for CORS (used by main middleware, timeout, error, and 404 handlers)
+const getAllowedOrigins = () => [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'https://dnv2vd007hcre.cloudfront.net',
+  'https://practice.skillvantix.com',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return null;
+  const allowed = getAllowedOrigins();
+  if (allowed.includes(origin)) return origin;
+  if (origin.includes('localhost:5173') || origin.includes('cloudfront.net') || origin.includes('skillvantix.com')) return origin;
+  return null;
+};
+
+const setCorsHeadersFromReq = (req, res) => {
+  const origin = req.headers.origin;
+  const allowedOrigin = isOriginAllowed(origin);
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+};
 
 // CORS middleware - MUST be before other middleware
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:3000',
-    'https://dnv2vd007hcre.cloudfront.net',
-    'https://practice.skillvantix.com',
-    process.env.FRONTEND_URL
-  ].filter(Boolean); // Remove undefined values
-  
-  // Determine if origin should be allowed
-  let shouldAllowOrigin = false;
-  let allowedOrigin = null;
-  
-  if (origin) {
-    if (allowedOrigins.includes(origin)) {
-      shouldAllowOrigin = true;
-      allowedOrigin = origin;
-    } else if (origin.includes('localhost:5173') || origin.includes('cloudfront.net')) {
-      // Explicitly allow localhost:5173 and any cloudfront domains
-      shouldAllowOrigin = true;
-      allowedOrigin = origin;
-    }
-  }
-  
-  // Always set CORS headers (browser requires them for preflight and error responses)
-  // Set headers on every response, including errors
+  const allowedOrigin = isOriginAllowed(origin);
+
   const setCorsHeaders = () => {
-    if (shouldAllowOrigin && allowedOrigin) {
+    if (allowedOrigin) {
       res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     }
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -67,46 +73,35 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
     res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   };
-  
-  // Set headers immediately
+
   setCorsHeaders();
-  
-  // Handle preflight OPTIONS request - must return 200 with headers
+
   if (req.method === 'OPTIONS') {
     return res.status(200).json({});
   }
-  
-  // Override res.json and res.status to ensure CORS headers are always included
+
   const originalJson = res.json.bind(res);
   const originalStatus = res.status.bind(res);
-  
-  res.json = function(data) {
+  res.json = function (data) {
     setCorsHeaders();
     return originalJson(data);
   };
-  
-  res.status = function(code) {
+  res.status = function (code) {
     setCorsHeaders();
     return originalStatus(code);
   };
-  
+
   next();
 });
 
-// Request timeout middleware - ensures requests don't hang indefinitely
+// Request timeout middleware - ensures requests don't hang indefinitely (25s to stay under CloudFront 30s)
 app.use((req, res, next) => {
-  // Set a timeout for all requests (25 seconds to be under CloudFront's 30s default)
   req.setTimeout(25000, () => {
     if (!res.headersSent) {
-      // Ensure CORS headers are set even on timeout
-      const origin = req.headers.origin;
-      if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-      }
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.status(504).json({ 
-        error: 'Gateway Timeout', 
-        message: 'Request timed out. Please try again.' 
+      setCorsHeadersFromReq(req, res);
+      res.status(504).json({
+        error: 'Gateway Timeout',
+        message: 'Request timed out. Please try again.'
       });
     }
   });
@@ -187,17 +182,9 @@ app.use((err, req, res, next) => {
   console.error('Error name:', err.name);
   console.error('Error code:', err.code);
   console.error('Error stack:', err.stack);
-  
-  // Ensure CORS headers are set on error responses
-  const origin = req.headers.origin;
-  if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
-  }
-  
-  // Handle Multer errors specifically
+
+  setCorsHeadersFromReq(req, res);
+
   if (err.name === 'MulterError') {
     console.error('Multer error detected:', err.message, err.code);
     return res.status(400).json({
@@ -206,7 +193,7 @@ app.use((err, req, res, next) => {
       code: err.code
     });
   }
-  
+
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     details: process.env.NODE_ENV === 'development' ? err.stack : undefined
@@ -215,14 +202,7 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use((req, res) => {
-  // Ensure CORS headers are set on 404 responses
-  const origin = req.headers.origin;
-  if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
-  }
+  setCorsHeadersFromReq(req, res);
   res.status(404).json({ error: 'Route not found' });
 });
 
