@@ -1274,6 +1274,61 @@ class AdministrationController {
       res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   }
+
+  /**
+   * Reactivate a force-expired course for a specific user in an administration
+   */
+  static async reactivateUser(req, res) {
+    try {
+      const { id, userId } = req.params;
+      const currentUser = req.user;
+
+      const administration = await CourseAdministration.findById(id);
+      if (!administration) {
+        return res.status(404).json({ error: 'Administration not found' });
+      }
+
+      if (currentUser.role === 'college_admin' && administration.college !== currentUser.college_name) {
+        return res.status(403).json({ error: 'You can only reactivate users from your institution' });
+      }
+
+      const [enrollments] = await pool.execute(
+        'SELECT * FROM enrollments WHERE student_id = ? AND administration_id = ?',
+        [userId, id]
+      );
+
+      if (enrollments.length === 0) {
+        return res.status(404).json({ error: 'User is not enrolled in this administration' });
+      }
+
+      const enrollment = enrollments[0];
+      if (enrollment.status !== 'Expired') {
+        return res.status(400).json({ error: 'User enrollment is not expired' });
+      }
+
+      await Enrollment.updateStatus(enrollment.id, 'inProgress');
+
+      const courseId = administration.course_id;
+      await pool.execute(
+        `UPDATE user_courses 
+         SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ? AND course_id = ?`,
+        [userId, courseId]
+      );
+
+      console.log(`Reactivated course for user ${userId} in administration ${id} by admin ${currentUser.id}`);
+
+      res.json({
+        message: 'Course reactivated successfully for the user',
+        enrollment_id: enrollment.id,
+        user_id: parseInt(userId),
+        administration_id: parseInt(id)
+      });
+    } catch (error) {
+      console.error('Reactivate user error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  }
 }
 
 module.exports = AdministrationController;
