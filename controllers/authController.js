@@ -398,9 +398,20 @@ class AuthController {
 
       // Generate new access token
       const accessToken = generateAccessToken(user);
+      const userForClient = normalizeUserRole(user);
 
       return res.json({
-        accessToken: accessToken
+        accessToken,
+        user: {
+          id: userForClient.id,
+          name: userForClient.name,
+          email: userForClient.email,
+          role: userForClient.role,
+          college_name: userForClient.college_name || null,
+          roll_number: userForClient.roll_number || null,
+          department: userForClient.department || null,
+          section: userForClient.section || null
+        }
       });
     } catch (error) {
       console.error('Refresh token error:', error);
