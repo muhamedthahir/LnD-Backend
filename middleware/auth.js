@@ -130,8 +130,8 @@ const enforceInstitutionAccess = (req, res, next) => {
     // Override any college query param to prevent bypassing
     req.query.college = req.user.college_name;
     req.query.college_name = req.user.college_name;
-  } else if (req.user.role === 'primary_admin') {
-    // primary_admin can access all institutions
+  } else if (req.user.role === 'primary_admin' || req.user.role === 'skillvantix_admin') {
+    // primary_admin and skillvantix_admin can access all institutions
     req.institutionFilter = null; // No filter - access all
   }
 
@@ -146,7 +146,7 @@ const enforceInstitutionAccess = (req, res, next) => {
  */
 const canAccessInstitution = (user, collegeName) => {
   if (!user) return false;
-  if (user.role === 'primary_admin') return true;
+  if (user.role === 'primary_admin' || user.role === 'skillvantix_admin') return true;
   if (user.role === 'college_admin') {
     return user.college_name === collegeName;
   }
@@ -163,7 +163,7 @@ const getInstitutionFilter = (user) => {
   if (user.role === 'college_admin') {
     return user.college_name;
   }
-  return null; // primary_admin sees all
+  return null; // primary_admin and skillvantix_admin see all
 };
 
 module.exports = { 

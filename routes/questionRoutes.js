@@ -27,17 +27,17 @@ const upload = multer({
 router.get('/', authenticate, QuestionController.getQuestions);
 router.get('/:id', authenticate, QuestionController.getQuestion);
 router.get('/:id/programming-details', authenticate, QuestionController.getProgrammingDetails);
-router.post('/', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.createQuestion);
-router.put('/:id', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.updateQuestion);
-router.delete('/:id', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.deleteQuestion);
+router.post('/', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), QuestionController.createQuestion);
+router.put('/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), QuestionController.updateQuestion);
+router.delete('/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), QuestionController.deleteQuestion);
 
 // Question bank association
-router.post('/:id/add-to-bank', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.addToQuestionBank);
-router.post('/:id/remove-from-bank', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.removeFromQuestionBank);
+router.post('/:id/add-to-bank', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), QuestionController.addToQuestionBank);
+router.post('/:id/remove-from-bank', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), QuestionController.removeFromQuestionBank);
 
 // Bulk upload for MCQ questions
-router.get('/bulk-upload/mcq/template', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.downloadBulkMcqTemplate);
-router.post('/bulk-upload/mcq', authenticate, authorize('primary_admin', 'college_admin'), upload.single('file'), QuestionController.uploadBulkMcqQuestions);
+router.get('/bulk-upload/mcq/template', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), QuestionController.downloadBulkMcqTemplate);
+router.post('/bulk-upload/mcq', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), upload.single('file'), QuestionController.uploadBulkMcqQuestions);
 
 module.exports = router;
 

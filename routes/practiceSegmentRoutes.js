@@ -10,13 +10,13 @@ router.get('/topic/:topic_id', authenticate, PracticeSegmentController.getByTopi
 router.get('/:id', authenticate, PracticeSegmentController.getById);
 
 // Create a new practice segment (admin only)
-router.post('/', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.create);
+router.post('/', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.create);
 
 // Update a practice segment (admin only)
-router.put('/:id', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.update);
+router.put('/:id', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.update);
 
 // Delete a practice segment (admin only)
-router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.delete);
+router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.delete);
 
 // Get available programming questions for practice segment (filtered by institution)
 router.get('/:id/available-programming-questions', authenticate, PracticeSegmentController.getAvailableProgrammingQuestions);
@@ -31,16 +31,16 @@ router.get('/:id/programming-questions', authenticate, PracticeSegmentController
 router.get('/:id/mcq-questions', authenticate, PracticeSegmentController.getMcqQuestions);
 
 // Add programming question to practice segment (admin only)
-router.post('/:id/programming-questions', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.addProgrammingQuestion);
+router.post('/:id/programming-questions', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.addProgrammingQuestion);
 
 // Remove programming question from practice segment (admin only)
-router.delete('/:id/programming-questions/:question_id', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.removeProgrammingQuestion);
+router.delete('/:id/programming-questions/:question_id', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.removeProgrammingQuestion);
 
 // Add MCQ question to practice segment (admin only)
-router.post('/:id/mcq-questions', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.addMcqQuestion);
+router.post('/:id/mcq-questions', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.addMcqQuestion);
 
 // Remove MCQ question from practice segment (admin only)
-router.delete('/:id/mcq-questions/:question_id', authenticate, authorize('college_admin', 'primary_admin'), PracticeSegmentController.removeMcqQuestion);
+router.delete('/:id/mcq-questions/:question_id', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), PracticeSegmentController.removeMcqQuestion);
 
 module.exports = router;
 

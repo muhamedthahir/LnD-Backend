@@ -5,7 +5,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 // All routes require authentication and primary_admin role
 router.use(authenticate);
-router.use(authorize('primary_admin'));
+router.use(authorize('primary_admin', 'skillvantix_admin'));
 
 // List and filter templates
 router.get('/', MailerTemplateController.getTemplates);

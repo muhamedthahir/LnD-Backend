@@ -16,7 +16,7 @@ router.put('/me', UserDetailsController.updateMyDetails);
 router.get('/completion', UserDetailsController.checkCompletion);
 
 // Admin routes - get any user's details
-router.get('/user/:userId', authorize('primary_admin', 'college_admin'), UserDetailsController.getDetailsByUserId);
+router.get('/user/:userId', authorize('primary_admin', 'college_admin', 'skillvantix_admin'), UserDetailsController.getDetailsByUserId);
 
 module.exports = router;
 

@@ -8,53 +8,53 @@ const assessmentController = require('../controllers/assessmentController');
 // =====================================================
 
 // Assessment CRUD
-router.post('/assessments', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.createAssessment);
-router.get('/assessments', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getAssessments);
-router.get('/assessments/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getAssessment);
-router.put('/assessments/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateAssessment);
-router.delete('/assessments/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteAssessment);
-router.patch('/assessments/:id/status', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateAssessmentStatus);
-router.post('/assessments/:id/duplicate', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.duplicateAssessment);
+router.post('/assessments', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.createAssessment);
+router.get('/assessments', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getAssessments);
+router.get('/assessments/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getAssessment);
+router.put('/assessments/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateAssessment);
+router.delete('/assessments/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.deleteAssessment);
+router.patch('/assessments/:id/status', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateAssessmentStatus);
+router.post('/assessments/:id/duplicate', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.duplicateAssessment);
 
 // Segment CRUD
-router.post('/segments', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.createSegment);
-router.get('/assessments/:assessment_id/segments', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getSegments);
-router.get('/segments/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getSegment);
-router.put('/segments/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateSegment);
-router.delete('/segments/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteSegment);
-router.patch('/segments/:id/reorder', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.reorderSegment);
+router.post('/segments', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.createSegment);
+router.get('/assessments/:assessment_id/segments', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getSegments);
+router.get('/segments/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getSegment);
+router.put('/segments/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateSegment);
+router.delete('/segments/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.deleteSegment);
+router.patch('/segments/:id/reorder', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.reorderSegment);
 
 // Segment Questions
-router.post('/segments/programming-questions', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.addProgrammingQuestion);
-router.patch('/segments/programming-questions/:segment_id/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateProgrammingQuestion);
-router.delete('/segments/:segment_id/programming-questions/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.removeProgrammingQuestion);
-router.post('/segments/mcq-questions', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.addMCQQuestion);
-router.patch('/segments/mcq-questions/:segment_id/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateMCQQuestion);
-router.delete('/segments/:segment_id/mcq-questions/:question_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.removeMCQQuestion);
+router.post('/segments/programming-questions', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.addProgrammingQuestion);
+router.patch('/segments/programming-questions/:segment_id/:question_id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateProgrammingQuestion);
+router.delete('/segments/:segment_id/programming-questions/:question_id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.removeProgrammingQuestion);
+router.post('/segments/mcq-questions', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.addMCQQuestion);
+router.patch('/segments/mcq-questions/:segment_id/:question_id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateMCQQuestion);
+router.delete('/segments/:segment_id/mcq-questions/:question_id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.removeMCQQuestion);
 
 // Random Fetch Criteria
-router.post('/random-fetch-criteria', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.addRandomFetchCriteria);
-router.get('/segments/:segment_id/random-fetch-criteria', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getRandomFetchCriteria);
-router.put('/random-fetch-criteria/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateRandomFetchCriteria);
-router.delete('/random-fetch-criteria/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteRandomFetchCriteria);
+router.post('/random-fetch-criteria', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.addRandomFetchCriteria);
+router.get('/segments/:segment_id/random-fetch-criteria', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getRandomFetchCriteria);
+router.put('/random-fetch-criteria/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateRandomFetchCriteria);
+router.delete('/random-fetch-criteria/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.deleteRandomFetchCriteria);
 
 // Administrator Configuration CRUD
-router.post('/administrators', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.createAdministrator);
-router.get('/assessments/:assessment_id/administrators', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getAdministrators);
-router.get('/administrators/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getAdministrator);
-router.put('/administrators/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateAdministrator);
-router.patch('/administrators/:id/status', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.updateAdministratorStatus);
-router.delete('/administrators/:id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteAdministrator);
+router.post('/administrators', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.createAdministrator);
+router.get('/assessments/:assessment_id/administrators', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getAdministrators);
+router.get('/administrators/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getAdministrator);
+router.put('/administrators/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateAdministrator);
+router.patch('/administrators/:id/status', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.updateAdministratorStatus);
+router.delete('/administrators/:id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.deleteAdministrator);
 
 // User Mapping (Admin)
-router.post('/administrators/invite', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.inviteUsers);
-router.get('/administrators/:administrator_id/users', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getUserMappings);
-router.get('/administrators/:administrator_id/report', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.downloadAssessmentReport);
+router.post('/administrators/invite', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.inviteUsers);
+router.get('/administrators/:administrator_id/users', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.getUserMappings);
+router.get('/administrators/:administrator_id/report', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.downloadAssessmentReport);
 router.get('/mappings/:mapping_id/result', authenticate, assessmentController.getAssessmentResult);
-router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattempt);
-router.post('/user-mappings/:mapping_id/refresh-violation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.refreshViolation);
-router.delete('/user-mappings/:mapping_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteUserMapping);
-router.post('/user-mappings/:mapping_id/send-invitation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.sendInvitation);
+router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.allowReattempt);
+router.post('/user-mappings/:mapping_id/refresh-violation', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.refreshViolation);
+router.delete('/user-mappings/:mapping_id', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.deleteUserMapping);
+router.post('/user-mappings/:mapping_id/send-invitation', authenticate, authorize('primary_admin', 'college_admin', 'skillvantix_admin'), assessmentController.sendInvitation);
 
 // =====================================================
 // USER ROUTES - Assessment Taking

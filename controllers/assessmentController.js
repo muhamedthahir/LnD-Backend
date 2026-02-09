@@ -1894,8 +1894,8 @@ const getAssessmentResult = async (req, res) => {
       return res.status(404).json({ error: 'Assessment not found' });
     }
 
-    // Verify user or admin (primary_admin, college_admin, or generic admin)
-    const isAdmin = ['primary_admin', 'college_admin', 'admin'].includes(req.user.role);
+    // Verify user or admin (primary_admin, college_admin, skillvantix_admin, or generic admin)
+    const isAdmin = ['primary_admin', 'college_admin', 'skillvantix_admin', 'admin'].includes(req.user.role);
     
     if (mapping.user_id !== req.user.id && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });

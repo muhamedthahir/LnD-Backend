@@ -68,7 +68,7 @@ class CourseController {
       // Build filters
       const filters = { search, category, status };
       
-      // college_admin can only see courses created by users from their institution
+      // college_admin can only see courses created by users from their institution; primary_admin and skillvantix_admin see all
       if (currentUser.role === 'college_admin') {
         filters.college_name = currentUser.college_name;
       }
@@ -99,7 +99,7 @@ class CourseController {
         return res.status(404).json({ error: 'Course not found' });
       }
 
-      // college_admin can only view courses from their institution
+      // college_admin can only view courses from their institution; primary_admin and skillvantix_admin can view all
       if (currentUser.role === 'college_admin') {
         const creatorCollege = await CourseController.getCourseCreatorCollege(id);
         if (creatorCollege !== currentUser.college_name) {
@@ -132,6 +132,11 @@ class CourseController {
       const course = await Course.findById(id);
       if (!course) {
         return res.status(404).json({ error: 'Course not found' });
+      }
+
+      // skillvantix_admin cannot edit published courses (only primary_admin can)
+      if (currentUser.role === 'skillvantix_admin' && course.status === 'published') {
+        return res.status(403).json({ error: 'Only primary admins can edit published courses' });
       }
 
       // college_admin can only update courses from their institution
@@ -171,7 +176,7 @@ class CourseController {
         return res.status(404).json({ error: 'Course not found' });
       }
 
-      // college_admin can only delete courses from their institution
+      // college_admin can only delete courses from their institution; primary_admin and skillvantix_admin can delete any
       if (currentUser.role === 'college_admin') {
         const creatorCollege = await CourseController.getCourseCreatorCollege(id);
         if (creatorCollege !== currentUser.college_name) {

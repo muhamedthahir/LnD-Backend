@@ -8,9 +8,9 @@ router.get('/course/:course_id', authenticate, TopicController.getByCourse);
 router.get('/:id', authenticate, TopicController.getById);
 
 // Admin routes
-router.post('/', authenticate, authorize('college_admin', 'primary_admin'), TopicController.create);
-router.put('/:id', authenticate, authorize('college_admin', 'primary_admin'), TopicController.update);
-router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin'), TopicController.delete);
+router.post('/', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), TopicController.create);
+router.put('/:id', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), TopicController.update);
+router.delete('/:id', authenticate, authorize('college_admin', 'primary_admin', 'skillvantix_admin'), TopicController.delete);
 
 module.exports = router;
 
