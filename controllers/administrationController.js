@@ -861,7 +861,6 @@ class AdministrationController {
           `SELECT DISTINCT u.id, u.name, u.email, u.role
            FROM users u
            WHERE (u.role = 'primary_admin')
-              OR (u.role = 'skillvantix_admin')
               OR (u.role = 'college_admin' AND u.college_name = ?)`,
           [administration.college]
         );

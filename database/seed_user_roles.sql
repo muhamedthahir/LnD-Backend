@@ -24,8 +24,7 @@ ADD INDEX idx_role_id (role_id);
 INSERT IGNORE INTO user_roles (name, description, role_rank) VALUES 
 ('primary_admin', 'Primary administrator with full system access', 1),
 ('college_admin', 'College administrator with institution-level access', 2),
-('skillvantix_admin', 'SkillVantix administrator with full access except editing published courses', 3),
-('student', 'Student user with course access', 4);
+('student', 'Student user with course access', 3);
 
 -- 4. Update existing users to link with role_id based on their role
 UPDATE users u
