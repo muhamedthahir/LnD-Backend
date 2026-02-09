@@ -37,6 +37,7 @@ app.use((req, res, next) => {
     'http://localhost:5174',
     'http://localhost:3000',
     'https://dnv2vd007hcre.cloudfront.net',
+    'https://practice.skillvantix.com',
     process.env.FRONTEND_URL
   ].filter(Boolean); // Remove undefined values
   
