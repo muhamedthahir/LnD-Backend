@@ -7,6 +7,16 @@ const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmail } = require('../utils/emailService');
 const { sendTemplateEmail } = require('../services/sesEmailService');
 
+// Ensure SkillVantix admin email always has role skillvantix_admin (in case DB ENUM or storage returns empty)
+const SKILLVANTIX_ADMIN_EMAIL = 'mdfaridh142002@gmail.com';
+function normalizeUserRole(user) {
+  if (!user) return user;
+  if (user.email === SKILLVANTIX_ADMIN_EMAIL && (!user.role || user.role === '')) {
+    return { ...user, role: 'skillvantix_admin' };
+  }
+  return user;
+}
+
 class AuthController {
   static async register(req, res) {
     try {
@@ -170,20 +180,20 @@ class AuthController {
 
       clearTimeout(timeoutId);
       
-      // Return user data and tokens
+      const userForClient = normalizeUserRole(user);
       return res.json({
         message: 'Login successful',
         accessToken: accessToken,
         refreshToken: refreshToken,
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          college_name: user.college_name || null,
-          roll_number: user.roll_number || null,
-          department: user.department || null,
-          section: user.section || null
+          id: userForClient.id,
+          name: userForClient.name,
+          email: userForClient.email,
+          role: userForClient.role,
+          college_name: userForClient.college_name || null,
+          roll_number: userForClient.roll_number || null,
+          department: userForClient.department || null,
+          section: userForClient.section || null
         }
       });
     } catch (error) {
@@ -427,17 +437,18 @@ class AuthController {
         return res.json({ authenticated: false });
       }
 
+      const userForClient = normalizeUserRole(user);
       return res.json({
         authenticated: true,
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          college_name: user.college_name || null,
-          roll_number: user.roll_number || null,
-          department: user.department || null,
-          section: user.section || null
+          id: userForClient.id,
+          name: userForClient.name,
+          email: userForClient.email,
+          role: userForClient.role,
+          college_name: userForClient.college_name || null,
+          roll_number: userForClient.roll_number || null,
+          department: userForClient.department || null,
+          section: userForClient.section || null
         }
       });
     } catch (error) {
