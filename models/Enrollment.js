@@ -95,6 +95,20 @@ class Enrollment {
   }
 
   /**
+   * Find enrollment for a student in a specific administration (any status)
+   * @param {number} administration_id - The administration ID
+   * @param {number} student_id - The student/user ID
+   * @returns {Object|null} - The enrollment row if found, null otherwise
+   */
+  static async findByStudentAndAdministration(administration_id, student_id) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM enrollments WHERE administration_id = ? AND student_id = ?',
+      [administration_id, student_id]
+    );
+    return rows[0] || null;
+  }
+
+  /**
    * Check if a user is already enrolled in a course through any administration or direct enrollment
    * Excludes expired enrollments
    * @param {number} student_id - The student/user ID
