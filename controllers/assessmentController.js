@@ -2542,7 +2542,7 @@ const switchSegment = async (req, res) => {
 
     // Get admin and check if segment switch is allowed
     const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
-    const segments = await AssessmentSegment.findByAssessmentId(admin.assessment_id);
+    const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
     
     if (segment_index < 0 || segment_index >= segments.length) {
       return res.status(400).json({ error: 'Invalid segment index' });
@@ -2558,12 +2558,23 @@ const switchSegment = async (req, res) => {
     const targetSegment = segments[segment_index];
     const questions = await getSegmentQuestions(targetSegment.id, mapping_id);
 
+    // If segment was already started/completed, restore saved answers and time remaining
+    const progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, targetSegment.id);
+    const hasTakenSegment = progress && progress.status !== 'NOT_STARTED';
+    const savedAnswers = hasTakenSegment
+      ? await UserQuestionAssignment.getSavedAnswers(mapping_id, targetSegment.id)
+      : {};
+    const segmentTimeRemaining = hasTakenSegment
+      ? (progress.time_remaining ?? 0)
+      : targetSegment.segment_duration;
+
     res.json({
       segment_index,
       segment: targetSegment,
       questions,
       segment_duration: targetSegment.segment_duration,
-      saved_answers: {}
+      segment_time_remaining: segmentTimeRemaining,
+      saved_answers: savedAnswers
     });
   } catch (error) {
     console.error('Error switching segment:', error);
