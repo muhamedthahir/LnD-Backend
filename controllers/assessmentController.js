@@ -1956,7 +1956,8 @@ const getAssessmentResult = async (req, res) => {
         if (q.question_type === 'PROGRAMMING') {
           submission = await ProgrammingSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
         } else {
-          submission = await MCQSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+          const resolvedQuestionId = await MCQSubmission.resolveQuestionId(q.question_id);
+          submission = await MCQSubmission.findByAssessmentAndQuestion(mapping_id, resolvedQuestionId);
         }
 
         return {
