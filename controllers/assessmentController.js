@@ -2127,9 +2127,9 @@ const saveAnswer = async (req, res) => {
       const [mcqRows] = await pool.execute(
         `SELECT id, question_id
          FROM mcq_multiselect_questions
-         WHERE id = ? OR question_id = ?
+         WHERE id = ?
          LIMIT 1`,
-        [question_id, question_id]
+        [question_id]
       );
       const resolvedQuestionId = mcqRows[0]?.question_id || question_id;
       await MCQSubmission.createOrUpdateForAssessment({
