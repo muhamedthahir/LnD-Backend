@@ -98,39 +98,52 @@ class AdministrationController {
           const members = await Group.getMembers(groupId);
           if (members && members.length > 0) {
             for (const member of members) {
-              // Check if user is already enrolled in this course through any administration
-              const existingEnrollment = await Enrollment.checkCourseEnrollment(member.id, courseId);
-              if (!existingEnrollment) {
-                // Only create enrollment if user is not already enrolled in this course
+              const existingInAdmin = await Enrollment.findByStudentAndAdministration(adminId, member.id);
+              if (existingInAdmin) {
+                if (existingInAdmin.status === 'Expired') {
+                  await Enrollment.updateStatus(existingInAdmin.id, 'inProgress');
+                  await pool.execute(
+                    `UPDATE user_courses SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND course_id = ?`,
+                    [member.id, courseId]
+                  );
+                  invitesSent = true;
+                }
+                continue;
+              }
+              const existingInCourse = await Enrollment.checkCourseEnrollment(member.id, courseId);
+              if (!existingInCourse) {
                 await Enrollment.create({
                   user_id: member.id,
                   administration_id: adminId,
                   status: 'invited'
                 });
                 invitesSent = true;
-              } else {
-                // User is already enrolled in this course, skip creating duplicate
-                console.log(`User ${member.id} is already enrolled in course ${courseId}, skipping duplicate enrollment`);
               }
             }
           }
         }
       } else if (candidateType === 'individual' && individualUsers && individualUsers.length > 0) {
-        // Enroll individual users
         for (const user of individualUsers) {
-          // Check if user is already enrolled in this course through any administration
-          const existingEnrollment = await Enrollment.checkCourseEnrollment(user.id, courseId);
-          if (!existingEnrollment) {
-            // Only create enrollment if user is not already enrolled in this course
+          const existingInAdmin = await Enrollment.findByStudentAndAdministration(adminId, user.id);
+          if (existingInAdmin) {
+            if (existingInAdmin.status === 'Expired') {
+              await Enrollment.updateStatus(existingInAdmin.id, 'inProgress');
+              await pool.execute(
+                `UPDATE user_courses SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND course_id = ?`,
+                [user.id, courseId]
+              );
+              invitesSent = true;
+            }
+            continue;
+          }
+          const existingInCourse = await Enrollment.checkCourseEnrollment(user.id, courseId);
+          if (!existingInCourse) {
             await Enrollment.create({
               user_id: user.id,
               administration_id: adminId,
               status: 'invited'
             });
             invitesSent = true;
-          } else {
-            // User is already enrolled in this course, skip creating duplicate
-            console.log(`User ${user.id} is already enrolled in course ${courseId}, skipping duplicate enrollment`);
           }
         }
       }
@@ -305,6 +318,7 @@ class AdministrationController {
         }
       }
       
+      const adminCourseId = existingAdmin.course_id;
       if (candidateType === 'group' && selectedGroups && selectedGroups.length > 0) {
         // Save selected groups for this administration
         await CourseAdministration.saveSelectedGroups(id, selectedGroups);
@@ -314,39 +328,52 @@ class AdministrationController {
           const members = await Group.getMembers(groupId);
           if (members && members.length > 0) {
             for (const member of members) {
-              // Check if user is already enrolled in this course through any administration
-              const existingEnrollment = await Enrollment.checkCourseEnrollment(member.id, courseId);
-              if (!existingEnrollment) {
-                // Only create enrollment if user is not already enrolled in this course
+              const existingInAdmin = await Enrollment.findByStudentAndAdministration(id, member.id);
+              if (existingInAdmin) {
+                if (existingInAdmin.status === 'Expired') {
+                  await Enrollment.updateStatus(existingInAdmin.id, 'inProgress');
+                  await pool.execute(
+                    `UPDATE user_courses SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND course_id = ?`,
+                    [member.id, adminCourseId]
+                  );
+                  invitesSent = true;
+                }
+                continue;
+              }
+              const existingInCourse = await Enrollment.checkCourseEnrollment(member.id, adminCourseId);
+              if (!existingInCourse) {
                 await Enrollment.create({
                   user_id: member.id,
                   administration_id: id,
                   status: 'invited'
                 });
                 invitesSent = true;
-              } else {
-                // User is already enrolled in this course, skip creating duplicate
-                console.log(`User ${member.id} is already enrolled in course ${courseId}, skipping duplicate enrollment`);
               }
             }
           }
         }
       } else if (candidateType === 'individual' && individualUsers && individualUsers.length > 0) {
-        // Enroll individual users
         for (const user of individualUsers) {
-          // Check if user is already enrolled in this course through any administration
-          const existingEnrollment = await Enrollment.checkCourseEnrollment(user.id, courseId);
-          if (!existingEnrollment) {
-            // Only create enrollment if user is not already enrolled in this course
+          const existingInAdmin = await Enrollment.findByStudentAndAdministration(id, user.id);
+          if (existingInAdmin) {
+            if (existingInAdmin.status === 'Expired') {
+              await Enrollment.updateStatus(existingInAdmin.id, 'inProgress');
+              await pool.execute(
+                `UPDATE user_courses SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND course_id = ?`,
+                [user.id, adminCourseId]
+              );
+              invitesSent = true;
+            }
+            continue;
+          }
+          const existingInCourse = await Enrollment.checkCourseEnrollment(user.id, adminCourseId);
+          if (!existingInCourse) {
             await Enrollment.create({
               user_id: user.id,
               administration_id: id,
               status: 'invited'
             });
             invitesSent = true;
-          } else {
-            // User is already enrolled in this course, skip creating duplicate
-            console.log(`User ${user.id} is already enrolled in course ${courseId}, skipping duplicate enrollment`);
           }
         }
       }
@@ -702,7 +729,18 @@ class AdministrationController {
         return res.status(403).json({ error: 'You can only view enrollments from your institution' });
       }
 
-      const enrolledUsers = await Enrollment.findByAdministrationId(id);
+      let enrolledUsers = await Enrollment.findByAdministrationId(id);
+      // Dedupe by user_id: same user can have only one enrollment per administration; prefer non-Expired
+      const byUser = new Map();
+      for (const u of enrolledUsers) {
+        const key = u.user_id;
+        const existing = byUser.get(key);
+        const isExpired = u.enrollment_status === 'Expired' || u.course_status === 'expired';
+        if (!existing || (existing.enrollment_status === 'Expired' && !isExpired)) {
+          byUser.set(key, u);
+        }
+      }
+      enrolledUsers = Array.from(byUser.values());
 
       res.json({
         enrolledUsers,
