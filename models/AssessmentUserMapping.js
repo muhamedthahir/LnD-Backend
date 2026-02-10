@@ -884,13 +884,21 @@ class AssessmentUserMapping {
 
     // First, calculate scores for any MCQ submissions that don't have scores yet (from mcq_submissions table)
     const [uncalculatedMCQ] = await pool.execute(
-      `SELECT ms.id, ms.mcq_question_id, ms.last_selected_options, ms.correct_options, uqa.weightage
+      `SELECT ms.id,
+              ms.mcq_question_id,
+              ms.last_selected_options,
+              ms.correct_options,
+              uqa.weightage,
+              mq.id as mcq_id
        FROM mcq_submissions ms
-       LEFT JOIN user_question_assignments uqa ON ms.mcq_question_id = uqa.question_id 
+       LEFT JOIN mcq_multiselect_questions mq
+         ON mq.question_id = ms.mcq_question_id OR mq.id = ms.mcq_question_id
+       LEFT JOIN user_question_assignments uqa
+         ON (uqa.question_id = ms.mcq_question_id OR uqa.question_id = mq.id)
          AND uqa.assessment_user_mapping_id = ms.assessment_user_mapping_id
          AND uqa.question_type = 'MCQ'
-       WHERE ms.assessment_user_mapping_id = ? 
-         AND ms.last_score IS NULL 
+       WHERE ms.assessment_user_mapping_id = ?
+         AND ms.last_score IS NULL
          AND ms.last_selected_options IS NOT NULL`,
       [mapping_id]
     );
@@ -898,9 +906,10 @@ class AssessmentUserMapping {
     for (const sub of uncalculatedMCQ) {
       try {
         // Get correct options for this MCQ
+        const mcqId = sub.mcq_id || sub.mcq_question_id;
         const [correctOptions] = await pool.execute(
           `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
-          [sub.mcq_question_id]
+          [mcqId]
         );
         const correctIds = correctOptions.map(o => o.id).sort((a, b) => a - b);
         
@@ -954,9 +963,12 @@ class AssessmentUserMapping {
     for (const segment of segments) {
       // Get MCQ submissions from mcq_submissions table
       const [mcqSubmissions] = await pool.execute(
-        `SELECT ms.*, uqa.weightage
+        `SELECT ms.*, uqa.weightage, mq.id as mcq_id
          FROM mcq_submissions ms
-         LEFT JOIN user_question_assignments uqa ON ms.mcq_question_id = uqa.question_id 
+         LEFT JOIN mcq_multiselect_questions mq
+           ON mq.question_id = ms.mcq_question_id OR mq.id = ms.mcq_question_id
+         LEFT JOIN user_question_assignments uqa
+           ON (uqa.question_id = ms.mcq_question_id OR uqa.question_id = mq.id)
            AND uqa.assessment_user_mapping_id = ms.assessment_user_mapping_id
            AND uqa.question_type = 'MCQ'
          WHERE ms.assessment_user_mapping_id = ?

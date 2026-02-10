@@ -1088,20 +1088,73 @@ class UserQuestionAssignment {
   /**
    * Get saved answers for a mapping
    */
-  static async getSavedAnswers(assessment_user_mapping_id) {
-    const [rows] = await pool.execute(
-      'SELECT * FROM user_question_submissions WHERE assessment_user_mapping_id = ?',
-      [assessment_user_mapping_id]
-    );
-    
+  static async getSavedAnswers(assessment_user_mapping_id, assessment_segment_id = null) {
     const answers = {};
-    for (const row of rows) {
-      try {
-        answers[row.question_id] = row.answer_data ? JSON.parse(row.answer_data) : null;
-      } catch (e) {
-        answers[row.question_id] = row.answer_data;
+    const params = [assessment_user_mapping_id];
+    const segmentFilter = assessment_segment_id !== null && assessment_segment_id !== undefined
+      ? ' AND ms.assessment_segment_id = ?'
+      : '';
+
+    if (segmentFilter) params.push(assessment_segment_id);
+
+    const [mcqRows] = await pool.execute(
+      `SELECT ms.mcq_question_id,
+              ms.last_selected_options,
+              ms.is_correct,
+              ms.last_score,
+              mq.id as mcq_id
+       FROM mcq_submissions ms
+       LEFT JOIN mcq_multiselect_questions mq
+         ON mq.question_id = ms.mcq_question_id OR mq.id = ms.mcq_question_id
+       WHERE ms.assessment_user_mapping_id = ?${segmentFilter}`,
+      params
+    );
+
+    for (const row of mcqRows) {
+      let selected = row.last_selected_options;
+      if (typeof selected === 'string') {
+        try { selected = JSON.parse(selected); } catch (e) { /* keep raw */ }
       }
+      const key = row.mcq_id || row.mcq_question_id;
+      answers[key] = {
+        question_type: 'MCQ',
+        selected_options: selected,
+        is_correct: row.is_correct,
+        score: row.last_score
+      };
     }
+
+    const progParams = [assessment_user_mapping_id];
+    const progSegmentFilter = assessment_segment_id !== null && assessment_segment_id !== undefined
+      ? ' AND ps.assessment_segment_id = ?'
+      : '';
+    if (progSegmentFilter) progParams.push(assessment_segment_id);
+
+    const [progRows] = await pool.execute(
+      `SELECT ps.programming_question_id,
+              ps.last_submitted_code,
+              ps.language_used,
+              ps.status,
+              ps.last_score,
+              ps.last_test_cases_passed,
+              ps.test_cases_total
+       FROM programming_submissions ps
+       WHERE ps.assessment_user_mapping_id = ?${progSegmentFilter}`,
+      progParams
+    );
+
+    for (const row of progRows) {
+      answers[row.programming_question_id] = {
+        question_type: 'PROGRAMMING',
+        code: row.last_submitted_code,
+        language: row.language_used,
+        status: row.status,
+        score: row.last_score,
+        test_cases_passed: row.last_test_cases_passed,
+        test_cases_total: row.test_cases_total
+      };
+    }
+
     return answers;
   }
   

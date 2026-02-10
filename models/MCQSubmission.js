@@ -48,6 +48,17 @@ class MCQSubmission {
   }
 
   /**
+   * Resolve mcq_question_id to base questions.id (handles mcq_multiselect_questions.id input)
+   */
+  static async resolveQuestionId(mcq_question_id) {
+    const [rows] = await pool.execute(
+      'SELECT question_id FROM mcq_multiselect_questions WHERE id = ?',
+      [mcq_question_id]
+    );
+    return rows[0]?.question_id || mcq_question_id;
+  }
+
+  /**
    * Create or update MCQ submission for assessment
    * @param {Object} data - submission data for assessment
    */
@@ -65,11 +76,13 @@ class MCQSubmission {
       time_spent_seconds = 0
     } = data;
 
+    const resolvedQuestionId = await this.resolveQuestionId(mcq_question_id);
+
     // Ensure assessment columns exist
     await this.ensureAssessmentColumns();
 
     // Check if submission exists for this assessment
-    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, mcq_question_id);
+    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, resolvedQuestionId);
 
     if (existing) {
       // Determine if this is the best submission
@@ -115,7 +128,7 @@ class MCQSubmission {
           total_time_spent_seconds, first_answered_at, last_answered_at)
          VALUES (?, ?, ?, ?, 'answered', ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [
-          user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id,
+          user_id, resolvedQuestionId, assessment_user_mapping_id, assessment_segment_id,
           JSON.stringify(selected_options), JSON.stringify(selected_options), JSON.stringify(correct_options),
           is_correct, score, score, max_score,
           time_spent_seconds
@@ -146,14 +159,15 @@ class MCQSubmission {
     // Ensure assessment columns exist
     await this.ensureAssessmentColumns();
 
-    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, mcq_question_id);
+    const resolvedQuestionId = await this.resolveQuestionId(mcq_question_id);
+    const existing = await this.findByAssessmentAndQuestion(assessment_user_mapping_id, resolvedQuestionId);
     if (existing) return existing.id;
 
     const [result] = await pool.execute(
       `INSERT INTO mcq_submissions 
        (user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id, practice_segment_id, status, attempt_count)
        VALUES (?, ?, ?, ?, NULL, 'attempted', 0)`,
-      [user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id]
+      [user_id, resolvedQuestionId, assessment_user_mapping_id, assessment_segment_id]
     );
     return result.insertId;
   }

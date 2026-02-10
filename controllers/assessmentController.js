@@ -1672,8 +1672,9 @@ const getAssessmentTake = async (req, res) => {
     // Calculate time remaining
     const startTime = new Date(mapping.assessment_started_time);
     const now = new Date();
-    const elapsedSeconds = Math.floor((now - startTime) / 1000);
     const totalDuration = admin.timing_config?.total_time || 0;
+    const startMs = startTime.getTime();
+    const elapsedSeconds = Number.isFinite(startMs) ? Math.floor((now - startTime) / 1000) : 0;
     const timeRemaining = Math.max(0, totalDuration - elapsedSeconds);
 
     // Calculate segment time remaining if segment-wise timing
@@ -1696,19 +1697,27 @@ const getAssessmentTake = async (req, res) => {
     // Get saved answers from database
     let answersMap = {};
     try {
-      answersMap = await UserQuestionAssignment.getSavedAnswers(mapping_id);
+      answersMap = await UserQuestionAssignment.getSavedAnswers(mapping_id, currentSegment.id);
     } catch (e) {
       console.log('No saved answers found or table not exists');
     }
 
-    // Check if this is a resume (if saved time_remaining exists and is less than calculated)
-    const isResume = mapping.time_remaining > 0 && mapping.time_remaining < timeRemaining;
-    const actualTimeRemaining = isResume ? mapping.time_remaining : timeRemaining;
-    
-    // For segment time, use saved if resuming in same segment
-    const actualSegmentTimeRemaining = (isResume && mapping.segment_time_remaining > 0) 
-      ? mapping.segment_time_remaining 
+    const hasSavedTime = mapping.time_remaining > 0;
+    const hasSavedSegmentTime = mapping.segment_time_remaining > 0;
+
+    // Prefer saved remaining time when available (never exceed computed time)
+    const actualTimeRemaining = hasSavedTime
+      ? Math.min(mapping.time_remaining, timeRemaining || mapping.time_remaining)
+      : timeRemaining;
+
+    const actualSegmentTimeRemaining = hasSavedSegmentTime
+      ? Math.min(mapping.segment_time_remaining, segmentTimeRemaining || mapping.segment_time_remaining)
       : segmentTimeRemaining;
+
+    // Check if this is a resume
+    const isResume =
+      (hasSavedTime && mapping.time_remaining < totalDuration) ||
+      (hasSavedSegmentTime && currentSegment?.segment_duration && mapping.segment_time_remaining < currentSegment.segment_duration);
 
     // If resuming, increment resume count
     if (isResume) {
@@ -2096,20 +2105,37 @@ const saveAnswer = async (req, res) => {
     // Get correct options for MCQ to pass to submission
     let correctOptions = [];
     if (question_type === 'MCQ') {
+      const [mcqRows] = await pool.execute(
+        `SELECT id, question_id
+         FROM mcq_multiselect_questions
+         WHERE id = ? OR question_id = ?
+         LIMIT 1`,
+        [question_id, question_id]
+      );
+      const mcqId = mcqRows[0]?.id;
+
       const [correctOpts] = await pool.execute(
         `SELECT id FROM options WHERE mcq_multiselect_question_id = ? AND is_correct = 1`,
-        [question_id]
+        [mcqId || question_id]
       );
       correctOptions = correctOpts.map(o => o.id);
     }
 
     // Save or update the answer in mcq_submissions table
     if (question_type === 'MCQ') {
+      const [mcqRows] = await pool.execute(
+        `SELECT id, question_id
+         FROM mcq_multiselect_questions
+         WHERE id = ? OR question_id = ?
+         LIMIT 1`,
+        [question_id, question_id]
+      );
+      const resolvedQuestionId = mcqRows[0]?.question_id || question_id;
       await MCQSubmission.createOrUpdateForAssessment({
         user_id: req.user.id,
         assessment_user_mapping_id: mapping_id,
         assessment_segment_id: segment_id,
-        mcq_question_id: question_id,
+        mcq_question_id: resolvedQuestionId,
         selected_options: Array.isArray(answer) ? answer : (answer?.selected_options || [answer]),
         correct_options: correctOptions,
         is_correct: isCorrect,
