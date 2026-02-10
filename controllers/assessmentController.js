@@ -1742,6 +1742,7 @@ const getAssessmentTake = async (req, res) => {
       current_segment_index: currentSegmentIndex,
       current_question_index: mapping.current_question_index || 0,
       saved_answers: answersMap,
+      allow_segment_switch: admin.proctoring_config?.allow_segment_switch ?? true,
       proctoring: {
         proctoring_enabled: admin.proctoring_config?.proctoring_enabled || false,
         full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
