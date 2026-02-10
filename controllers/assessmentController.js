@@ -2582,6 +2582,7 @@ const switchSegment = async (req, res) => {
   }
 };
 
+
 // Helper function to get segment questions
 const getSegmentQuestions = async (segmentId, mappingId) => {
   const assignments = await UserQuestionAssignment.getByMappingAndSegment(mappingId, segmentId);

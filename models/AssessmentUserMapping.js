@@ -668,12 +668,30 @@ class AssessmentUserMapping {
     }
 
     const questions = [];
-    
+    const totalQuestions = parseInt(criteria.total_questions, 10) || 0;
+    const easy = criteria.easy_count;
+    const medium = criteria.medium_count;
+    const hard = criteria.hard_count;
+    const countsProvided = [easy, medium, hard].every(v => v !== null && v !== undefined);
+    const countsSum = (parseInt(easy, 10) || 0) + (parseInt(medium, 10) || 0) + (parseInt(hard, 10) || 0);
+
+    // If counts are missing or don't match total, fetch any level to satisfy total
+    if (totalQuestions > 0 && (!countsProvided || countsSum !== totalQuestions)) {
+      const anyQuery = query + ` ORDER BY RAND() LIMIT ${totalQuestions}`;
+      const [rows] = await pool.execute(anyQuery, params);
+      return rows.map((q, i) => ({
+        question_id: q.id,
+        sequence_order: i + 1,
+        weightage: q.weightage || 1,
+        is_from_random_fetch: true
+      }));
+    }
+
     // Fetch by difficulty
-    for (const [difficulty, count] of [['easy', criteria.easy_count], ['medium', criteria.medium_count], ['hard', criteria.hard_count]]) {
+    for (const [difficulty, count] of [['easy', easy], ['medium', medium], ['hard', hard]]) {
       const levelId = levelMap[difficulty];
       if (!levelId) continue;
-      if (count > 0) {
+      if ((parseInt(count, 10) || 0) > 0) {
         const diffQuery = query + ` AND q.level_id = ? ORDER BY RAND() LIMIT ${count}`;
         const [rows] = await pool.execute(diffQuery, [...params, levelId]);
         questions.push(...rows.map((q, i) => ({
@@ -724,12 +742,30 @@ class AssessmentUserMapping {
     }
 
     const questions = [];
-    
+    const totalQuestions = parseInt(criteria.total_questions, 10) || 0;
+    const easy = criteria.easy_count;
+    const medium = criteria.medium_count;
+    const hard = criteria.hard_count;
+    const countsProvided = [easy, medium, hard].every(v => v !== null && v !== undefined);
+    const countsSum = (parseInt(easy, 10) || 0) + (parseInt(medium, 10) || 0) + (parseInt(hard, 10) || 0);
+
+    // If counts are missing or don't match total, fetch any level to satisfy total
+    if (totalQuestions > 0 && (!countsProvided || countsSum !== totalQuestions)) {
+      const anyQuery = query + ` ORDER BY RAND() LIMIT ${totalQuestions}`;
+      const [rows] = await pool.execute(anyQuery, params);
+      return rows.map((q, i) => ({
+        question_id: q.id,
+        sequence_order: i + 1,
+        weightage: q.weightage || 1,
+        is_from_random_fetch: true
+      }));
+    }
+
     // Fetch by difficulty
-    for (const [difficulty, count] of [['easy', criteria.easy_count], ['medium', criteria.medium_count], ['hard', criteria.hard_count]]) {
+    for (const [difficulty, count] of [['easy', easy], ['medium', medium], ['hard', hard]]) {
       const levelId = levelMap[difficulty];
       if (!levelId) continue;
-      if (count > 0) {
+      if ((parseInt(count, 10) || 0) > 0) {
         const diffQuery = query + ` AND q.level_id = ? ORDER BY RAND() LIMIT ${count}`;
         const [rows] = await pool.execute(diffQuery, [...params, levelId]);
         questions.push(...rows.map((q, i) => ({

@@ -197,7 +197,8 @@ class AssessmentAdministrator {
               'SELECT COUNT(*) as total FROM segment_mcq_questions WHERE assessment_segment_id = ?',
               [segment.id]
             );
-            const questionType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
+            const fallbackType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
+            const questionType = segmentQ.question_type || fallbackType;
             await connection.execute(
               `INSERT INTO random_fetch_criteria 
                (assessment_segment_id, question_type, question_bank_id, total_questions, easy_count, medium_count, hard_count, is_active)
@@ -570,6 +571,7 @@ class AssessmentAdministrator {
                   for (const criteriaRow of existingCriteria) {
                     await connection.execute(
                       `UPDATE random_fetch_criteria SET
+                         question_type = ?,
                          question_bank_id = ?,
                          total_questions = ?,
                          easy_count = ?,
@@ -577,6 +579,7 @@ class AssessmentAdministrator {
                          hard_count = ?
                        WHERE id = ?`,
                       [
+                        segmentQ.question_type || 'MCQ',
                         segmentQ.question_bank_id || null,
                         segmentQ.total || 0,
                         segmentQ.easy || 0,
@@ -595,7 +598,8 @@ class AssessmentAdministrator {
                     'SELECT COUNT(*) as total FROM segment_mcq_questions WHERE assessment_segment_id = ?',
                     [segment.id]
                   );
-                  const questionType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
+                  const fallbackType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
+                  const questionType = segmentQ.question_type || fallbackType;
                   await connection.execute(
                     `INSERT INTO random_fetch_criteria 
                      (assessment_segment_id, question_type, question_bank_id, total_questions, easy_count, medium_count, hard_count, is_active)
