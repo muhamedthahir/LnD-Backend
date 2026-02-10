@@ -2584,60 +2584,85 @@ const switchSegment = async (req, res) => {
 
 // Helper function to get segment questions
 const getSegmentQuestions = async (segmentId, mappingId) => {
-  // Get programming questions
-  const [progQuestions] = await pool.execute(
-    `SELECT pq.*, aspq.marks, aspq.order_index
-     FROM assessment_segment_programming_questions aspq
-     JOIN programming_questions pq ON aspq.programming_question_id = pq.id
-     WHERE aspq.assessment_segment_id = ?
-     ORDER BY aspq.order_index`,
-    [segmentId]
-  );
+  const assignments = await UserQuestionAssignment.getByMappingAndSegment(mappingId, segmentId);
+  const questions = [];
 
-  // Get MCQ questions
-  const [mcqQuestions] = await pool.execute(
-    `SELECT mq.*, asmq.marks, asmq.order_index
-     FROM assessment_segment_mcq_questions asmq
-     JOIN mcq_questions mq ON asmq.mcq_question_id = mq.id
-     WHERE asmq.assessment_segment_id = ?
-     ORDER BY asmq.order_index`,
-    [segmentId]
-  );
+  for (const assignment of assignments) {
+    if (assignment.question_type === 'PROGRAMMING') {
+      const [pqRows] = await pool.execute(
+        `SELECT pq.*, q.name, q.description, q.points
+         FROM programming_questions pq
+         JOIN questions q ON pq.question_id = q.id
+         WHERE pq.id = ?`,
+        [assignment.question_id]
+      );
 
-  // Get MCQ options
-  for (const q of mcqQuestions) {
-    const [options] = await pool.execute(
-      'SELECT * FROM mcq_options WHERE mcq_question_id = ? ORDER BY order_index',
-      [q.id]
-    );
-    q.options = options;
+      if (pqRows[0]) {
+        const [testCaseRows] = await pool.execute(
+          `SELECT id, input, expected_result, description, is_hidden, weight
+           FROM test_cases
+           WHERE programming_question_id = ? AND is_hidden = 0
+           ORDER BY \`order\` ASC, id ASC`,
+          [pqRows[0].id]
+        );
+
+        questions.push({
+          ...pqRows[0],
+          question_type: 'PROGRAMMING',
+          programming_question_id: pqRows[0].id,
+          problem_statement: pqRows[0].name || pqRows[0].description,
+          sequence_order: assignment.sequence_order,
+          weightage: assignment.weightage,
+          test_cases: testCaseRows.map(tc => ({
+            id: tc.id,
+            input: tc.input,
+            expected_output: tc.expected_result,
+            description: tc.description,
+            is_hidden: tc.is_hidden,
+            points: tc.weight
+          }))
+        });
+      }
+    } else if (assignment.question_type === 'MCQ') {
+      const [mqRows] = await pool.execute(
+        `SELECT mq.*, q.name, q.description, q.points,
+                COALESCE(smq.positive_marks, q.points) as positive_marks,
+                COALESCE(smq.negative_marks, 0) as negative_marks,
+                COALESCE(smq.neutral_marks, 0) as neutral_marks
+         FROM mcq_multiselect_questions mq
+         JOIN questions q ON mq.question_id = q.id
+         LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id AND smq.assessment_segment_id = ?
+         WHERE mq.id = ?`,
+        [segmentId, assignment.question_id]
+      );
+
+      if (mqRows[0]) {
+        const [optionRows] = await pool.execute(
+          `SELECT id, text as option_text, \`order\`
+           FROM options
+           WHERE mcq_multiselect_question_id = ?
+           ORDER BY \`order\` ASC`,
+          [mqRows[0].id]
+        );
+
+        questions.push({
+          ...mqRows[0],
+          question_type: 'MCQ',
+          mcq_question_id: mqRows[0].id,
+          question_text: mqRows[0].name || mqRows[0].description,
+          sequence_order: assignment.sequence_order,
+          weightage: assignment.weightage,
+          options: optionRows.map(opt => ({
+            id: opt.id,
+            value: opt.id,
+            text: opt.option_text
+          }))
+        });
+      }
+    }
   }
 
-  // Get test cases for programming questions (only non-hidden for display)
-  for (const q of progQuestions) {
-    const [testCases] = await pool.execute(
-      `SELECT id, input, expected_result, description, is_hidden, weight 
-       FROM test_cases 
-       WHERE programming_question_id = ? AND is_hidden = 0
-       ORDER BY \`order\` ASC, id ASC`,
-      [q.id]
-    );
-    q.test_cases = testCases.map(tc => ({
-      id: tc.id,
-      input: tc.input,
-      expected_output: tc.expected_result,
-      description: tc.description,
-      points: tc.weight
-    }));
-  }
-
-  // Combine and sort questions
-  const allQuestions = [
-    ...progQuestions.map(q => ({ ...q, type: 'PROGRAMMING', question_type: 'PROGRAMMING' })),
-    ...mcqQuestions.map(q => ({ ...q, type: 'MCQ', question_type: 'MCQ' }))
-  ].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
-
-  return allQuestions;
+  return questions;
 };
 
 // =====================================================
