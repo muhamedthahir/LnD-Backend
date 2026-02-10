@@ -151,8 +151,8 @@ class MCQSubmission {
 
     const [result] = await pool.execute(
       `INSERT INTO mcq_submissions 
-       (user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id, status, attempt_count)
-       VALUES (?, ?, ?, ?, 'attempted', 0)`,
+       (user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id, practice_segment_id, status, attempt_count)
+       VALUES (?, ?, ?, ?, NULL, 'attempted', 0)`,
       [user_id, mcq_question_id, assessment_user_mapping_id, assessment_segment_id]
     );
     return result.insertId;
