@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS proctoring_configs (
     full_screen_mandatory BOOLEAN DEFAULT FALSE,
     webcam_required BOOLEAN DEFAULT FALSE,
     max_tab_switch_allowed INT DEFAULT -1 COMMENT '-1 means unlimited',
+    allow_segment_switch BOOLEAN DEFAULT TRUE,
     disable_copy_paste BOOLEAN DEFAULT FALSE,
     disable_right_click BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

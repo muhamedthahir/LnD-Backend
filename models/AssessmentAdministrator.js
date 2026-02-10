@@ -123,13 +123,14 @@ class AssessmentAdministrator {
       await connection.execute(
         `INSERT INTO proctoring_configs 
          (assessment_administrator_id, proctoring_enabled, full_screen_mandatory, webcam_required,
-          max_tab_switch_allowed, disable_copy_paste, disable_right_click)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          max_tab_switch_allowed, allow_segment_switch, disable_copy_paste, disable_right_click)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [adminId,
          proctoringConfig.proctoring_enabled || false,
          proctoringConfig.full_screen_mandatory || false,
          proctoringConfig.webcam_required || false,
          proctoringConfig.max_tab_switch_allowed ?? -1,
+         proctoringConfig.allow_segment_switch !== false,
          proctoringConfig.disable_copy_paste || false,
          proctoringConfig.disable_right_click || false]
       );
@@ -502,11 +503,12 @@ class AssessmentAdministrator {
              full_screen_mandatory = COALESCE(?, full_screen_mandatory),
              webcam_required = COALESCE(?, webcam_required),
              max_tab_switch_allowed = COALESCE(?, max_tab_switch_allowed),
+             allow_segment_switch = COALESCE(?, allow_segment_switch),
              disable_copy_paste = COALESCE(?, disable_copy_paste),
              disable_right_click = COALESCE(?, disable_right_click)
            WHERE assessment_administrator_id = ?`,
           [pc.proctoring_enabled, pc.full_screen_mandatory, pc.webcam_required,
-           pc.max_tab_switch_allowed, pc.disable_copy_paste, pc.disable_right_click, id]
+           pc.max_tab_switch_allowed, pc.allow_segment_switch, pc.disable_copy_paste, pc.disable_right_click, id]
         );
       }
 

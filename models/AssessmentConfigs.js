@@ -68,6 +68,7 @@ class ProctoringConfig {
         full_screen_mandatory BOOLEAN DEFAULT FALSE,
         webcam_required BOOLEAN DEFAULT FALSE,
         max_tab_switch_allowed INT DEFAULT -1,
+        allow_segment_switch BOOLEAN DEFAULT TRUE,
         disable_copy_paste BOOLEAN DEFAULT FALSE,
         disable_right_click BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -77,6 +78,9 @@ class ProctoringConfig {
       )
     `;
     await pool.execute(sql);
+    try {
+      await pool.execute(`ALTER TABLE proctoring_configs ADD COLUMN allow_segment_switch BOOLEAN DEFAULT TRUE`);
+    } catch (e) { /* Column may already exist */ }
   }
 
   static async findByAdminId(assessment_administrator_id) {
@@ -88,17 +92,21 @@ class ProctoringConfig {
   }
 
   static async update(assessment_administrator_id, data) {
+    try {
+      await pool.execute(`ALTER TABLE proctoring_configs ADD COLUMN allow_segment_switch BOOLEAN DEFAULT TRUE`);
+    } catch (e) { /* Column may already exist */ }
     await pool.execute(
       `UPDATE proctoring_configs SET
          proctoring_enabled = COALESCE(?, proctoring_enabled),
          full_screen_mandatory = COALESCE(?, full_screen_mandatory),
          webcam_required = COALESCE(?, webcam_required),
          max_tab_switch_allowed = COALESCE(?, max_tab_switch_allowed),
+         allow_segment_switch = COALESCE(?, allow_segment_switch),
          disable_copy_paste = COALESCE(?, disable_copy_paste),
          disable_right_click = COALESCE(?, disable_right_click)
        WHERE assessment_administrator_id = ?`,
       [data.proctoring_enabled, data.full_screen_mandatory, data.webcam_required,
-       data.max_tab_switch_allowed, data.disable_copy_paste, data.disable_right_click,
+       data.max_tab_switch_allowed, data.allow_segment_switch, data.disable_copy_paste, data.disable_right_click,
        assessment_administrator_id]
     );
     return true;
