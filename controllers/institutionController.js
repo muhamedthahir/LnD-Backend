@@ -55,10 +55,23 @@ class InstitutionController {
 
   static async createInstitution(req, res) {
     try {
-      const { name, admin_name, admin_email } = req.body;
+      const {
+        name,
+        admin_name,
+        admin_email,
+        address,
+        spoc_contact_number,
+        alternate_contact,
+        alternate_email,
+        status
+      } = req.body;
 
       if (!name || !admin_name || !admin_email) {
         return res.status(400).json({ error: 'Institution name, admin name, and admin email are required' });
+      }
+
+      if (alternate_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(alternate_email).trim())) {
+        return res.status(400).json({ error: 'Invalid alternate email format' });
       }
 
       // Check if institution already exists
@@ -68,7 +81,14 @@ class InstitutionController {
       }
 
       // Create institution
-      const institutionId = await Institution.create({ name });
+      const institutionId = await Institution.create({
+        name,
+        address,
+        spoc_contact_number,
+        alternate_contact,
+        alternate_email,
+        status
+      });
 
       // Handle admin user
       let adminUser = await User.findByEmail(admin_email);
@@ -137,10 +157,23 @@ class InstitutionController {
   static async updateInstitution(req, res) {
     try {
       const { id } = req.params;
-      const { name, admin_name, admin_email } = req.body;
+      const {
+        name,
+        admin_name,
+        admin_email,
+        address,
+        spoc_contact_number,
+        alternate_contact,
+        alternate_email,
+        status
+      } = req.body;
 
       if (!name) {
         return res.status(400).json({ error: 'Institution name is required' });
+      }
+
+      if (alternate_email && String(alternate_email).trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(alternate_email).trim())) {
+        return res.status(400).json({ error: 'Invalid alternate email format' });
       }
 
       const institution = await Institution.findById(id);
@@ -148,8 +181,15 @@ class InstitutionController {
         return res.status(404).json({ error: 'Institution not found' });
       }
 
-      // Update institution name
-      await Institution.update(id, { name });
+      // Update institution record (name + optional fields + status)
+      await Institution.update(id, {
+        name,
+        address,
+        spoc_contact_number,
+        alternate_contact,
+        alternate_email,
+        status
+      });
 
       // If admin details provided, update/create admin
       if (admin_name && admin_email) {
@@ -241,9 +281,9 @@ class InstitutionController {
 
   static async getAllInstitutions(req, res) {
     try {
-      const institutions = await Institution.getAll();
-      // Return full institution objects with id and name for dropdown usage
-      res.json({ 
+      const institutions = await Institution.getAllActive();
+      // Return full institution objects with id and name for dropdown usage (active only)
+      res.json({
         institutions: institutions.map(i => ({
           id: i.id,
           name: i.name

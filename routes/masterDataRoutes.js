@@ -6,6 +6,9 @@ const { authenticate, authorize } = require('../middleware/auth');
 // All master data - for dropdowns
 router.get('/all', authenticate, MasterDataController.getAllMasterData);
 
+router.get('/departments', authenticate, authorize('primary_admin', 'college_admin'), MasterDataController.getDepartments);
+router.get('/degrees', authenticate, authorize('primary_admin', 'college_admin'), MasterDataController.getDegrees);
+
 // ==================== LEVELS ====================
 router.get('/levels', authenticate, MasterDataController.getLevels);
 router.get('/levels/:id', authenticate, MasterDataController.getLevel);

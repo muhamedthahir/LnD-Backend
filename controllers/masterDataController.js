@@ -5,6 +5,8 @@ const Language = require('../models/Language');
 const Category = require('../models/Category');
 const Tag = require('../models/Tag');
 const UserRole = require('../models/UserRole');
+const Department = require('../models/Department');
+const Degree = require('../models/Degree');
 
 class MasterDataController {
   // ==================== GET ALL ====================
@@ -523,6 +525,28 @@ class MasterDataController {
     } catch (error) {
       console.error('Delete user role error:', error);
       res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+  }
+
+  // ==================== DEPARTMENTS / DEGREES (user catalogs) ====================
+
+  static async getDepartments(req, res) {
+    try {
+      const departments = await Department.getAll();
+      res.json({ departments });
+    } catch (error) {
+      console.error('Get departments error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  static async getDegrees(req, res) {
+    try {
+      const degrees = await Degree.getAll();
+      res.json({ degrees });
+    } catch (error) {
+      console.error('Get degrees error:', error);
+      res.status(500).json({ error: 'Internal server error' });
     }
   }
 }

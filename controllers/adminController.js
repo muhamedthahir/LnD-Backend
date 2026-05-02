@@ -6,6 +6,8 @@ const multer = require('multer');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
 const { getInstitutionFilter, canAccessInstitution } = require('../middleware/auth');
+const Department = require('../models/Department');
+const Degree = require('../models/Degree');
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -128,10 +130,31 @@ class AdminController {
       }
 
       // Validate student fields
+      let resolvedDepartment = department || null;
+      let resolvedDegree = degree || null;
       if (role === 'student') {
         if (!roll_number || !department) {
           return res.status(400).json({ error: 'Roll number and department are required for students' });
         }
+        const deptOk = await Department.validateExists(department);
+        if (!deptOk) {
+          return res.status(400).json({ error: 'Invalid department. Select a value from the list.' });
+        }
+        const deptRow = await Department.findByNormalizedName(department);
+        resolvedDepartment = deptRow.name;
+        if (degree && String(degree).trim()) {
+          const degOk = await Degree.validateExists(degree);
+          if (!degOk) {
+            return res.status(400).json({ error: 'Invalid degree. Select a value from the list.' });
+          }
+          const degRow = await Degree.findByNormalizedName(degree);
+          resolvedDegree = degRow.name;
+        } else {
+          resolvedDegree = null;
+        }
+      } else {
+        resolvedDepartment = null;
+        resolvedDegree = null;
       }
 
       // Check if user already exists
@@ -152,9 +175,9 @@ class AdminController {
         role,
         college_name: finalCollegeName || null,
         roll_number: roll_number || null,
-        department: department || null,
+        department: resolvedDepartment,
         section: section || '1',
-        degree: degree || null,
+        degree: resolvedDegree,
         otp,
         otp_expires_at: otpExpiresAt
       });
@@ -231,6 +254,36 @@ class AdminController {
 
       // Remove password from update if present (should be separate endpoint)
       delete updateData.password;
+
+      const effectiveRole = updateData.role || targetUser.role;
+      if (effectiveRole === 'student') {
+        if (updateData.department !== undefined) {
+          const d = updateData.department;
+          if (d != null && String(d).trim()) {
+            const deptOk = await Department.validateExists(d);
+            if (!deptOk) {
+              return res.status(400).json({ error: 'Invalid department. Select a value from the list.' });
+            }
+            const deptRow = await Department.findByNormalizedName(d);
+            updateData.department = deptRow.name;
+          } else {
+            updateData.department = null;
+          }
+        }
+        if (updateData.degree !== undefined) {
+          const g = updateData.degree;
+          if (g != null && String(g).trim()) {
+            const degOk = await Degree.validateExists(g);
+            if (!degOk) {
+              return res.status(400).json({ error: 'Invalid degree. Select a value from the list.' });
+            }
+            const degRow = await Degree.findByNormalizedName(g);
+            updateData.degree = degRow.name;
+          } else {
+            updateData.degree = null;
+          }
+        }
+      }
 
       await User.update(id, updateData);
       const user = await User.findById(id);
@@ -404,13 +457,24 @@ class AdminController {
         const row = data[i];
         const name = row['Name'] || row['name'];
         const email = row['Email'] || row['email'];
-        const roll_number = row['Roll Number'] || row['roll_number'] || row['Roll Number'] || null;
+        const roll_number = row['Roll Number'] || row['roll_number'] || null;
         const department = row['Department'] || row['department'] || null;
         const section = row['Section'] || row['section'] || '1';
         const degree = row['Degree'] || row['degree'] || null;
 
         if (!name || !email) {
           errors.push(`Row ${i + 2}: Missing name or email`);
+          continue;
+        }
+
+        if (!roll_number || !String(roll_number).trim()) {
+          errors.push(`Row ${i + 2}: Roll number is required`);
+          continue;
+        }
+
+        const deptRaw = department != null ? String(department).trim() : '';
+        if (!deptRaw) {
+          errors.push(`Row ${i + 2}: Department is required`);
           continue;
         }
 
@@ -421,6 +485,12 @@ class AdminController {
           if (existingUser) {
             errors.push(`Row ${i + 2}: User with email ${email} already exists`);
             continue;
+          }
+
+          const canonicalDepartment = await Department.ensureExists(deptRaw);
+          let canonicalDegree = null;
+          if (degree != null && String(degree).trim()) {
+            canonicalDegree = await Degree.ensureExists(degree);
           }
 
           // Generate OTP for new user
@@ -434,10 +504,10 @@ class AdminController {
             password: null,
             role: 'student',
             college_name: finalCollegeName,
-            roll_number,
-            department,
+            roll_number: String(roll_number).trim(),
+            department: canonicalDepartment,
             section: section || '1',
-            degree: degree || null,
+            degree: canonicalDegree,
             otp,
             otp_expires_at: otpExpiresAt
           });

@@ -5,9 +5,15 @@
 CREATE TABLE IF NOT EXISTS institutions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(255) NOT NULL UNIQUE,
+  address TEXT NULL,
+  spoc_contact_number VARCHAR(50) NULL,
+  alternate_contact VARCHAR(50) NULL,
+  alternate_email VARCHAR(255) NULL,
+  status ENUM('active', 'inactive') NOT NULL DEFAULT 'active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_name (name)
+  INDEX idx_name (name),
+  INDEX idx_institutions_status (status)
 );
 
 -- User Roles table (stores role hierarchy)
@@ -51,6 +57,44 @@ CREATE TABLE IF NOT EXISTS users (
   INDEX idx_otp (otp),
   INDEX idx_reset_token (reset_token)
 );
+
+-- Department / degree catalogs (user creation, bulk upload, filtering)
+CREATE TABLE IF NOT EXISTS departments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_department_name (name),
+  INDEX idx_department_name (name)
+);
+
+CREATE TABLE IF NOT EXISTS degrees (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_degree_name (name),
+  INDEX idx_degree_name (name)
+);
+
+INSERT IGNORE INTO departments (name) VALUES
+  ('Computer Science'),
+  ('Electronics and Communication'),
+  ('Mechanical Engineering'),
+  ('Civil Engineering'),
+  ('Electrical Engineering'),
+  ('Information Technology'),
+  ('Other');
+
+INSERT IGNORE INTO degrees (name) VALUES
+  ('B.Tech'),
+  ('M.Tech'),
+  ('B.Sc'),
+  ('M.Sc'),
+  ('MCA'),
+  ('MBA'),
+  ('Ph.D'),
+  ('Other');
 
 -- Courses table
 CREATE TABLE IF NOT EXISTS courses (
