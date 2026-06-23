@@ -38,6 +38,17 @@ class AssessmentSegment {
       console.error('Error creating assessment_segments table:', error);
       throw error;
     }
+
+    // Question source per segment (added later):
+    //  - 'POOL' => random fetch draws from the questions manually added to this segment
+    //  - 'BANK' => random fetch draws from the linked question bank
+    //  - NULL   => legacy segments; fetch falls back to random_fetch_criteria.question_bank_id
+    try {
+      await pool.execute(`ALTER TABLE assessment_segments ADD COLUMN question_source ENUM('POOL','BANK') DEFAULT NULL`);
+    } catch (e) { /* column already exists */ }
+    try {
+      await pool.execute(`ALTER TABLE assessment_segments ADD COLUMN question_bank_id INT DEFAULT NULL`);
+    } catch (e) { /* column already exists */ }
   }
 
   /**
@@ -60,6 +71,8 @@ class AssessmentSegment {
       allow_back_navigation = true,
       is_locked = false,
       negative_marking_enabled = null,
+      question_source = 'POOL',
+      question_bank_id = null,
       created_by
     } = segmentData;
 
@@ -79,10 +92,11 @@ class AssessmentSegment {
       const [result] = await pool.execute(
         `INSERT INTO assessment_segments 
          (unique_id, assessment_id, name, description, sequence_order, segment_duration, 
-          allow_back_navigation, is_locked, negative_marking_enabled, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          allow_back_navigation, is_locked, negative_marking_enabled, question_source, question_bank_id, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [unique_id, assessment_id, name, description, order, segment_duration,
-         allow_back_navigation, is_locked, negative_marking_enabled, created_by]
+         allow_back_navigation, is_locked, negative_marking_enabled,
+         question_source || 'POOL', question_bank_id || null, created_by]
       );
 
       // Update assessment total duration
@@ -153,7 +167,9 @@ class AssessmentSegment {
       segment_duration,
       allow_back_navigation,
       is_locked,
-      negative_marking_enabled
+      negative_marking_enabled,
+      question_source,
+      question_bank_id
     } = segmentData;
 
     // Get current segment to know assessment_id
@@ -168,6 +184,11 @@ class AssessmentSegment {
     const safeAllowBackNavigation = allow_back_navigation !== undefined ? allow_back_navigation : null;
     const safeIsLocked = is_locked !== undefined ? is_locked : null;
     const safeNegativeMarkingEnabled = negative_marking_enabled !== undefined ? negative_marking_enabled : null;
+    const safeQuestionSource = question_source !== undefined ? question_source : null;
+    // question_bank_id is set directly (null allowed) so switching to POOL can clear the bank
+    const safeQuestionBankId = question_source === 'BANK'
+      ? (question_bank_id || null)
+      : (question_source === 'POOL' ? null : (question_bank_id !== undefined ? question_bank_id : segment.question_bank_id ?? null));
 
     try {
       await pool.execute(
@@ -178,10 +199,13 @@ class AssessmentSegment {
            segment_duration = COALESCE(?, segment_duration),
            allow_back_navigation = COALESCE(?, allow_back_navigation),
            is_locked = COALESCE(?, is_locked),
-           negative_marking_enabled = ?
+           negative_marking_enabled = ?,
+           question_source = COALESCE(?, question_source),
+           question_bank_id = ?
          WHERE id = ?`,
         [safeName, safeDescription, safeSequenceOrder, safeSegmentDuration, 
-         safeAllowBackNavigation, safeIsLocked, safeNegativeMarkingEnabled, id]
+         safeAllowBackNavigation, safeIsLocked, safeNegativeMarkingEnabled,
+         safeQuestionSource, safeQuestionBankId, id]
       );
 
       // Update assessment total duration

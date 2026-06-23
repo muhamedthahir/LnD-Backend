@@ -27,6 +27,11 @@ UserDetails.createTable().catch(err => {
   console.error('Error creating user details table:', err);
 });
 
+const PlaygroundProject = require('./models/PlaygroundProject');
+PlaygroundProject.createTable().catch(err => {
+  console.error('Error creating playground projects table:', err);
+});
+
 const app = express();
 
 // Shared allowed origins for CORS (used by main middleware, timeout, error, and 404 handlers)
@@ -155,6 +160,9 @@ app.use('/api/user-details', require('./routes/userDetailsRoutes'));
 
 // Assessment routes
 app.use('/api/assessment', require('./routes/assessmentRoutes'));
+
+// Playground routes
+app.use('/api/playground', require('./routes/playgroundRoutes'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {

@@ -816,6 +816,387 @@ class QuestionController {
       res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   }
+
+  // Number of test case column sets included in the programming template
+  static get PROGRAMMING_TEMPLATE_TEST_CASES() {
+    return 5;
+  }
+
+  // Download Programming bulk upload template
+  static async downloadBulkProgrammingTemplate(req, res) {
+    try {
+      const maxTestCases = QuestionController.PROGRAMMING_TEMPLATE_TEST_CASES;
+
+      const workbook = XLSX.utils.book_new();
+
+      const headers = [
+        'Question Title', 'Question Description', 'Languages',
+        'Time Limit (seconds)', 'Memory Limit (MB)', 'Pass Threshold (%)',
+        'Max Submissions', 'Min Test Cases to Pass',
+        'Constraints', 'Sample Input', 'Sample Output',
+        'Points', 'Negative Marks', 'Time to Solve (seconds)',
+        'Explanation', 'Hint', 'Level', 'Question Bank', 'Category', 'Tags', 'Status'
+      ];
+      for (let i = 1; i <= maxTestCases; i++) {
+        headers.push(`Test Case ${i} Input`);
+        headers.push(`Test Case ${i} Expected Output`);
+        headers.push(`Test Case ${i} Hidden (Yes/No)`);
+      }
+
+      const worksheetData = [headers, new Array(headers.length).fill('')];
+      const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+
+      // Set column widths
+      const baseCols = [
+        { wch: 30 }, // Question Title
+        { wch: 40 }, // Question Description
+        { wch: 30 }, // Languages
+        { wch: 18 }, // Time Limit
+        { wch: 18 }, // Memory Limit
+        { wch: 18 }, // Pass Threshold
+        { wch: 16 }, // Max Submissions
+        { wch: 20 }, // Min Test Cases to Pass
+        { wch: 40 }, // Constraints
+        { wch: 30 }, // Sample Input
+        { wch: 30 }, // Sample Output
+        { wch: 10 }, // Points
+        { wch: 15 }, // Negative Marks
+        { wch: 20 }, // Time to Solve
+        { wch: 40 }, // Explanation
+        { wch: 30 }, // Hint
+        { wch: 15 }, // Level
+        { wch: 25 }, // Question Bank
+        { wch: 20 }, // Category
+        { wch: 30 }, // Tags
+        { wch: 15 }  // Status
+      ];
+      const testCaseCols = [];
+      for (let i = 1; i <= maxTestCases; i++) {
+        testCaseCols.push({ wch: 30 }, { wch: 30 }, { wch: 22 });
+      }
+      worksheet['!cols'] = [...baseCols, ...testCaseCols];
+
+      // Data validation dropdowns (Level = column Q, Status = column U)
+      worksheet['!dataValidation'] = [
+        {
+          sqref: 'Q2:Q1000', // Level column
+          type: 'list',
+          formula1: '"easy,medium,hard"',
+          showDropDown: true
+        },
+        {
+          sqref: 'U2:U1000', // Status column
+          type: 'list',
+          formula1: '"draft,review,published"',
+          showDropDown: true
+        }
+      ];
+
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Programming Questions');
+
+      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=programming_bulk_upload_template.xlsx');
+      res.send(buffer);
+    } catch (error) {
+      console.error('Download Programming template error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  // Bulk upload Programming questions from Excel
+  static async uploadBulkProgrammingQuestions(req, res) {
+    try {
+      const currentUser = req.user;
+      const userId = currentUser?.id;
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'Excel file is required' });
+      }
+
+      // Get Programming question type
+      const programmingType = await QuestionType.findByName('Programming');
+      if (!programmingType) {
+        return res.status(400).json({ error: 'Programming question type not found. Please ensure question types are seeded.' });
+      }
+
+      // Get default status (DRAFT)
+      const draftStatus = await Status.findByName('DRAFT');
+      if (!draftStatus) {
+        return res.status(400).json({ error: 'DRAFT status not found. Please ensure statuses are seeded.' });
+      }
+
+      // Parse Excel file
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+      const createdQuestions = [];
+      const errors = [];
+
+      // Get levels map for lookup
+      const levels = await pool.execute('SELECT id, name FROM levels');
+      const levelMap = {};
+      levels[0].forEach(level => {
+        levelMap[level.name.toLowerCase()] = level.id;
+      });
+
+      // Get statuses map for lookup
+      const statuses = await pool.execute('SELECT id, name FROM statuses');
+      const statusMap = {};
+      statuses[0].forEach(status => {
+        statusMap[status.name.toUpperCase()] = status.id;
+      });
+
+      // Get languages map for lookup by name
+      const languagesResult = await pool.execute('SELECT id, name FROM languages WHERE is_active = TRUE');
+      const languageMap = {};
+      languagesResult[0].forEach(lang => {
+        languageMap[lang.name.toLowerCase()] = lang.id;
+      });
+
+      // Get question banks map for lookup by name
+      const userInstitutionId = currentUser.role === 'college_admin'
+        ? await QuestionController.getInstitutionIdForUser(currentUser)
+        : null;
+
+      let questionBankQuery = 'SELECT id, name FROM question_banks WHERE active = TRUE';
+      let questionBankParams = [];
+      if (userInstitutionId) {
+        questionBankQuery += ' AND institution_id = ?';
+        questionBankParams.push(userInstitutionId);
+      }
+      const questionBanks = await pool.execute(questionBankQuery, questionBankParams);
+      const questionBankMap = {};
+      questionBanks[0].forEach(bank => {
+        questionBankMap[bank.name.toLowerCase()] = bank.id;
+      });
+
+      // Get categories map for lookup by name
+      const categories = await Category.getAll();
+      const categoryMap = {};
+      categories.forEach(cat => {
+        categoryMap[cat.name.toLowerCase()] = cat.id;
+      });
+
+      // Get tags map for lookup by name
+      const tags = await Tag.getAll();
+      const tagMap = {};
+      tags.forEach(tag => {
+        tagMap[tag.name.toLowerCase()] = tag.id;
+      });
+
+      const toIntOrNull = (value) => {
+        if (value === '' || value === null || value === undefined) return null;
+        const parsed = parseInt(value, 10);
+        return isNaN(parsed) ? null : parsed;
+      };
+
+      const isHiddenValue = (value) => {
+        const v = (value || '').toString().trim().toLowerCase();
+        return v === 'yes' || v === 'true' || v === 'y' || v === '1' || v === 'hidden';
+      };
+
+      for (let i = 0; i < data.length; i++) {
+        const row = data[i];
+        const rowNum = i + 2; // +2 because row 1 is header, and arrays are 0-indexed
+
+        try {
+          // Skip empty rows
+          if (!row['Question Title'] || !row['Question Title'].toString().trim()) {
+            continue;
+          }
+
+          // Validate and resolve languages (required)
+          const languageNames = (row['Languages'] || '').toString().trim();
+          if (!languageNames) {
+            errors.push({ row: rowNum, error: 'At least one language is required' });
+            continue;
+          }
+          const languageIds = [];
+          let invalidLanguage = null;
+          for (const langName of languageNames.split(',').map(l => l.trim()).filter(l => l)) {
+            const langId = languageMap[langName.toLowerCase()];
+            if (langId) {
+              if (!languageIds.includes(langId)) languageIds.push(langId);
+            } else {
+              invalidLanguage = langName;
+              break;
+            }
+          }
+          if (invalidLanguage) {
+            errors.push({ row: rowNum, error: `Language "${invalidLanguage}" not found` });
+            continue;
+          }
+          if (languageIds.length === 0) {
+            errors.push({ row: rowNum, error: 'At least one valid language is required' });
+            continue;
+          }
+
+          // Get level ID
+          let levelId = null;
+          if (row['Level']) {
+            const levelName = row['Level'].toString().trim().toLowerCase();
+            levelId = levelMap[levelName] || null;
+          }
+
+          // Get status ID (default to DRAFT)
+          let statusId = draftStatus.id;
+          if (row['Status']) {
+            const statusNameUpper = row['Status'].toString().trim().toUpperCase();
+            statusId = statusMap[statusNameUpper] || draftStatus.id;
+          }
+
+          // Get question bank ID by name
+          let questionBankId = null;
+          if (row['Question Bank'] && row['Question Bank'].toString().trim()) {
+            const bankName = row['Question Bank'].toString().trim();
+            const bankId = questionBankMap[bankName.toLowerCase()];
+            if (bankId) {
+              questionBankId = bankId;
+            } else {
+              errors.push({ row: rowNum, error: `Question bank "${bankName}" not found` });
+              continue;
+            }
+          }
+
+          // Get category ID by name
+          let categoryId = null;
+          if (row['Category'] && row['Category'].toString().trim()) {
+            const catName = row['Category'].toString().trim();
+            const catId = categoryMap[catName.toLowerCase()];
+            if (catId) {
+              categoryId = catId;
+            } else {
+              errors.push({ row: rowNum, error: `Category "${catName}" not found` });
+              continue;
+            }
+          }
+
+          // Get time to solve
+          let timeToSolve = null;
+          if (row['Time to Solve (seconds)']) {
+            const timeValue = parseFloat(row['Time to Solve (seconds)']);
+            if (!isNaN(timeValue) && timeValue > 0) {
+              timeToSolve = timeValue;
+            }
+          }
+
+          // Get tags (comma-separated, create if missing)
+          const tagIds = [];
+          if (row['Tags'] && row['Tags'].toString().trim()) {
+            const tagNameArray = row['Tags'].toString().trim().split(',').map(t => t.trim()).filter(t => t);
+            for (const tagName of tagNameArray) {
+              const tagId = tagMap[tagName.toLowerCase()];
+              if (tagId) {
+                tagIds.push(tagId);
+              } else {
+                try {
+                  const newTagId = await Tag.create({ name: tagName });
+                  tagIds.push(newTagId);
+                  tagMap[tagName.toLowerCase()] = newTagId;
+                } catch (tagError) {
+                  const existingTag = await Tag.findByName(tagName);
+                  if (existingTag) {
+                    tagIds.push(existingTag.id);
+                    tagMap[tagName.toLowerCase()] = existingTag.id;
+                  }
+                }
+              }
+            }
+          }
+
+          // Collect test cases from columns
+          const maxTestCases = QuestionController.PROGRAMMING_TEMPLATE_TEST_CASES;
+          const testCases = [];
+          for (let t = 1; t <= maxTestCases; t++) {
+            const input = row[`Test Case ${t} Input`];
+            const expected = row[`Test Case ${t} Expected Output`];
+            const hasInput = input !== '' && input !== null && input !== undefined;
+            const hasExpected = expected !== '' && expected !== null && expected !== undefined;
+            if (!hasInput && !hasExpected) continue;
+            testCases.push({
+              name: `Test Case ${testCases.length + 1}`,
+              input: hasInput ? input.toString() : '',
+              expected_result: hasExpected ? expected.toString() : '',
+              is_hidden: isHiddenValue(row[`Test Case ${t} Hidden (Yes/No)`]),
+              order: testCases.length
+            });
+          }
+
+          // Create base question
+          const questionData = {
+            name: row['Question Title'].toString().trim(),
+            description: row['Question Description'] ? row['Question Description'].toString().trim() : '',
+            level_id: levelId,
+            question_type_id: programmingType.id,
+            question_bank_id: questionBankId,
+            category_id: categoryId,
+            status_id: statusId,
+            points: row['Points'] ? parseFloat(row['Points']) || 1 : 1,
+            negative_marks: row['Negative Marks'] ? parseFloat(row['Negative Marks']) || 0 : 0,
+            time_to_solve: timeToSolve,
+            explanation: row['Explanation'] ? row['Explanation'].toString().trim() : '',
+            hint: row['Hint'] ? row['Hint'].toString().trim() : '',
+            created_by: userId,
+            tags: tagIds
+          };
+
+          const { id: questionId } = await Question.create(questionData);
+
+          // Create programming question record with languages
+          const programmingQuestionId = await ProgrammingQuestion.create({
+            question_id: questionId,
+            time_limit: toIntOrNull(row['Time Limit (seconds)']),
+            memory_limit: toIntOrNull(row['Memory Limit (MB)']),
+            threshold: toIntOrNull(row['Pass Threshold (%)']),
+            no_of_submission_allowed: toIntOrNull(row['Max Submissions']),
+            no_of_testcase_to_be_passed: toIntOrNull(row['Min Test Cases to Pass']),
+            constraints: row['Constraints'] ? row['Constraints'].toString().trim() : '',
+            sample_input: row['Sample Input'] ? row['Sample Input'].toString() : '',
+            sample_output: row['Sample Output'] ? row['Sample Output'].toString() : '',
+            languages: languageIds
+          });
+
+          // Create test cases
+          for (const tc of testCases) {
+            await TestCase.create({
+              programming_question_id: programmingQuestionId,
+              name: tc.name,
+              input: tc.input,
+              expected_result: tc.expected_result,
+              is_hidden: tc.is_hidden,
+              order: tc.order
+            });
+          }
+
+          createdQuestions.push({
+            row: rowNum,
+            questionId,
+            name: questionData.name
+          });
+
+        } catch (error) {
+          console.error(`Error processing row ${rowNum}:`, error);
+          errors.push({ row: rowNum, error: error.message || 'Failed to create question' });
+        }
+      }
+
+      res.json({
+        message: `Bulk upload completed. ${createdQuestions.length} question(s) created, ${errors.length} error(s).`,
+        created: createdQuestions.length,
+        errors: errors.length,
+        createdQuestions,
+        errors: errors.length > 0 ? errors : undefined
+      });
+
+    } catch (error) {
+      console.error('Bulk upload Programming error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  }
 }
 
 module.exports = QuestionController;

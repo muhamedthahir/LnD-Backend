@@ -74,8 +74,11 @@ class QuestionBankController {
         }
       }
 
-      // Get questions in this bank
-      const questions = await QuestionBank.getQuestions(id);
+      const includeQuestions = req.query.include_questions !== 'false';
+      let questions = [];
+      if (includeQuestions) {
+        questions = await QuestionBank.getQuestions(id);
+      }
 
       res.json({ questionBank, questions });
     } catch (error) {

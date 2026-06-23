@@ -404,12 +404,19 @@ class AssessmentUserMapping {
     try {
       await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN attempt_count INT DEFAULT 1`);
     } catch (e) { /* Column may already exist */ }
+    // Tracks when the candidate last saved an answer. Unlike last_activity_at (which is
+    // bumped by periodic auto-save/progress pings), this is only updated on answer saves,
+    // so it gives a clean per-question timing signal for anomaly detection.
+    try {
+      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN last_answer_saved_at DATETIME DEFAULT NULL`);
+    } catch (e) { /* Column may already exist */ }
 
     await pool.execute(
       `UPDATE assessment_user_mappings SET
          status = 'IN_PROGRESS',
          assessment_started_time = COALESCE(assessment_started_time, NOW()),
          last_activity_at = NOW(),
+         last_answer_saved_at = NOW(),
          ip_address = ?,
          browser_info = ?,
          time_remaining = CASE WHEN time_remaining > 0 THEN time_remaining ELSE ? END,
@@ -613,6 +620,13 @@ class AssessmentUserMapping {
   static async fetchRandomQuestionsForSegment(segment_id, mapping_id) {
     const result = { programming: [], mcq: [] };
 
+    // Load the segment to know its question source (POOL vs BANK vs legacy)
+    const [segmentRows] = await pool.execute(
+      'SELECT id, question_source, question_bank_id FROM assessment_segments WHERE id = ?',
+      [segment_id]
+    );
+    const segment = segmentRows[0] || { id: segment_id, question_source: null, question_bank_id: null };
+
     // Get random fetch criteria
     const [criteria] = await pool.execute(
       'SELECT * FROM random_fetch_criteria WHERE assessment_segment_id = ? AND is_active = TRUE',
@@ -621,10 +635,10 @@ class AssessmentUserMapping {
 
     for (const c of criteria) {
       if (c.question_type === 'PROGRAMMING') {
-        const questions = await this.fetchRandomProgrammingQuestions(c, mapping_id);
+        const questions = await this.fetchRandomProgrammingQuestions(c, mapping_id, segment);
         result.programming = questions;
       } else if (c.question_type === 'MCQ') {
-        const questions = await this.fetchRandomMCQQuestions(c, mapping_id);
+        const questions = await this.fetchRandomMCQQuestions(c, mapping_id, segment);
         result.mcq = questions;
       }
     }
@@ -633,9 +647,33 @@ class AssessmentUserMapping {
   }
 
   /**
+   * Build the source restriction (POOL vs BANK vs legacy criteria bank) shared by
+   * the programming and MCQ random fetch helpers.
+   *   - POOL  => restrict to the questions manually added to this segment
+   *   - BANK  => restrict to the bank linked on the segment
+   *   - legacy => fall back to the bank stored on the random_fetch_criteria row
+   */
+  static buildSourceRestriction({ segment, criteria, idColumn, poolTable, poolIdColumn }) {
+    let clause = '';
+    const params = [];
+    if (segment && segment.question_source === 'POOL') {
+      clause = ` AND ${idColumn} IN (SELECT ${poolIdColumn} FROM ${poolTable} WHERE assessment_segment_id = ?)`;
+      params.push(segment.id);
+    } else if (segment && segment.question_source === 'BANK' && segment.question_bank_id) {
+      clause = ' AND q.question_bank_id = ?';
+      params.push(segment.question_bank_id);
+    } else if (criteria.question_bank_id) {
+      // legacy segments without an explicit source
+      clause = ' AND q.question_bank_id = ?';
+      params.push(criteria.question_bank_id);
+    }
+    return { clause, params };
+  }
+
+  /**
    * Fetch random programming questions
    */
-  static async fetchRandomProgrammingQuestions(criteria, mapping_id) {
+  static async fetchRandomProgrammingQuestions(criteria, mapping_id, segment = null) {
     const [levels] = await pool.execute(
       "SELECT id, LOWER(name) as name FROM levels WHERE LOWER(name) IN ('easy','medium','hard')"
     );
@@ -650,10 +688,15 @@ class AssessmentUserMapping {
                  WHERE 1=1`;
     const params = [];
 
-    if (criteria.question_bank_id) {
-      query += ' AND q.question_bank_id = ?';
-      params.push(criteria.question_bank_id);
-    }
+    const restriction = this.buildSourceRestriction({
+      segment,
+      criteria,
+      idColumn: 'pq.id',
+      poolTable: 'segment_programming_questions',
+      poolIdColumn: 'programming_question_id'
+    });
+    query += restriction.clause;
+    params.push(...restriction.params);
 
     if (criteria.topics) {
       const topicIds = criteria.topics.split(',').map(t => t.trim());
@@ -709,7 +752,7 @@ class AssessmentUserMapping {
   /**
    * Fetch random MCQ questions
    */
-  static async fetchRandomMCQQuestions(criteria, mapping_id) {
+  static async fetchRandomMCQQuestions(criteria, mapping_id, segment = null) {
     const [levels] = await pool.execute(
       "SELECT id, LOWER(name) as name FROM levels WHERE LOWER(name) IN ('easy','medium','hard')"
     );
@@ -724,10 +767,15 @@ class AssessmentUserMapping {
                  WHERE 1=1`;
     const params = [];
 
-    if (criteria.question_bank_id) {
-      query += ' AND q.question_bank_id = ?';
-      params.push(criteria.question_bank_id);
-    }
+    const restriction = this.buildSourceRestriction({
+      segment,
+      criteria,
+      idColumn: 'mq.id',
+      poolTable: 'segment_mcq_questions',
+      poolIdColumn: 'mcq_question_id'
+    });
+    query += restriction.clause;
+    params.push(...restriction.params);
 
     if (criteria.topics) {
       const topicIds = criteria.topics.split(',').map(t => t.trim());

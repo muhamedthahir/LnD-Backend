@@ -1177,7 +1177,7 @@ class ProctoringLog {
       CREATE TABLE IF NOT EXISTS proctoring_logs (
         id INT AUTO_INCREMENT PRIMARY KEY,
         assessment_user_mapping_id INT NOT NULL,
-        event_type ENUM('TAB_SWITCH', 'FULLSCREEN_EXIT', 'WINDOW_BLUR', 'COPY_PASTE', 'RIGHT_CLICK', 'FACE_NOT_DETECTED', 'MULTIPLE_FACES', 'SCREEN_SHARE_STOPPED') NOT NULL,
+        event_type ENUM('TAB_SWITCH', 'FULLSCREEN_EXIT', 'WINDOW_BLUR', 'COPY_PASTE', 'RIGHT_CLICK', 'FACE_NOT_DETECTED', 'MULTIPLE_FACES', 'SCREEN_SHARE_STOPPED', 'RAPID_ANSWER') NOT NULL,
         event_timestamp DATETIME NOT NULL,
         metadata JSON DEFAULT NULL,
         segment_id INT DEFAULT NULL,
@@ -1188,6 +1188,15 @@ class ProctoringLog {
       )
     `;
     await pool.execute(sql);
+
+    // Ensure the ENUM on already-existing tables includes server-side anomaly types
+    // (e.g. RAPID_ANSWER). Safe/idempotent: re-running widens the column to the same set.
+    try {
+      await pool.execute(
+        `ALTER TABLE proctoring_logs MODIFY COLUMN event_type
+         ENUM('TAB_SWITCH', 'FULLSCREEN_EXIT', 'WINDOW_BLUR', 'COPY_PASTE', 'RIGHT_CLICK', 'FACE_NOT_DETECTED', 'MULTIPLE_FACES', 'SCREEN_SHARE_STOPPED', 'RAPID_ANSWER') NOT NULL`
+      );
+    } catch (e) { /* table may not exist yet or ENUM already current */ }
   }
 
   static async log(data) {

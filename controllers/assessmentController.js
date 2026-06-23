@@ -28,7 +28,26 @@ const formatLabel = (value) => {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 };
 
+// Option text may be authored as rich text (e.g. "<div>WME</div>"). Strip tags so
+// the "Answer Given" cell shows clean text in reports / the result page.
+const stripHtml = (value) =>
+  typeof value === 'string' ? value.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() : value;
+
 const isBooleanLikeKey = (key) => /(enabled|enable|allow|is_|_required|mandatory|disable|auto_|random)/i.test(key);
+
+// Basic IP allow-list check. `restriction` is a comma-separated list of IPs or prefixes
+// (e.g. "203.0.113.4, 192.168.1."). Empty restriction means "allow all".
+const isIpAllowed = (clientIp, restriction) => {
+  if (!restriction || !String(restriction).trim()) return true;
+  if (!clientIp) return false;
+  // Normalize IPv4-mapped IPv6 (::ffff:127.0.0.1) to plain IPv4
+  const ip = String(clientIp).replace(/^::ffff:/i, '').trim();
+  return String(restriction)
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .some(entry => ip === entry || ip.startsWith(entry));
+};
 
 const formatDateTime = (value) => {
   if (!value) return '';
@@ -49,6 +68,20 @@ const formatDurationMinutes = (value) => {
     return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
   }
   return `${totalMinutes}m`;
+};
+
+// Format a millisecond duration as MM:SS:mmm (minutes:seconds:milliseconds).
+// Minutes are not capped at 60 so long durations stay readable (e.g. 75:04:200).
+const formatDurationMs = (value) => {
+  if (value === null || value === undefined || value === '') return '';
+  const totalMs = Number(value);
+  if (Number.isNaN(totalMs)) return '';
+  const ms = Math.max(0, Math.round(totalMs));
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  const millis = ms % 1000;
+  const pad = (n, len = 2) => n.toString().padStart(len, '0');
+  return `${pad(minutes)}:${pad(seconds)}:${pad(millis, 3)}`;
 };
 
 const formatConfigValue = (key, value) => {
@@ -258,7 +291,7 @@ const duplicateAssessment = async (req, res) => {
  */
 const createSegment = async (req, res) => {
   try {
-    const { assessment_id, name, description, segment_duration, allow_back_navigation, is_locked } = req.body;
+    const { assessment_id, name, description, segment_duration, allow_back_navigation, is_locked, question_source, question_bank_id } = req.body;
 
     if (!assessment_id || !name) {
       return res.status(400).json({ error: 'Assessment ID and name are required' });
@@ -271,6 +304,8 @@ const createSegment = async (req, res) => {
       segment_duration: segment_duration || 1800,
       allow_back_navigation,
       is_locked,
+      question_source,
+      question_bank_id,
       created_by: req.user.id
     });
 
@@ -323,7 +358,7 @@ const getSegment = async (req, res) => {
 const updateSegment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, segment_duration, allow_back_navigation, is_locked, negative_marking_enabled } = req.body;
+    const { name, description, segment_duration, allow_back_navigation, is_locked, negative_marking_enabled, question_source, question_bank_id } = req.body;
 
     await AssessmentSegment.update(id, {
       name,
@@ -331,7 +366,9 @@ const updateSegment = async (req, res) => {
       segment_duration,
       allow_back_navigation,
       is_locked,
-      negative_marking_enabled
+      negative_marking_enabled,
+      question_source,
+      question_bank_id
     });
 
     res.json({ message: 'Segment updated successfully' });
@@ -889,29 +926,67 @@ const downloadAssessmentReport = async (req, res) => {
       }
     });
 
-    // Sheet 2: User details with segment/question columns
+    // Sheet 2: User details with segment/question columns.
+    // For random-fetch segments each candidate is assigned a different (and usually
+    // smaller) subset of the pool, so question columns are sized to the number of
+    // questions a candidate actually answers — not the whole pool. Columns are
+    // therefore positional (Q1, Q2, ...) and driven by user_question_assignments,
+    // falling back to the segment's fixed question list for legacy data.
     const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
-    const segmentDetails = [];
+    const mappingIds = mappingRows.map(row => row.id);
+
+    // Fallback question list per segment (used when a segment has no per-candidate
+    // assignments recorded, e.g. legacy attempts or non-random/fixed segments).
+    const poolListBySegment = {};
     for (const segment of segments) {
       const segmentWithQuestions = await AssessmentSegment.getWithQuestions(segment.id);
-      const questions = [
+      poolListBySegment[segment.id] = [
         ...(segmentWithQuestions?.programming_questions || []).map(q => ({
-          id: q.programming_question_id,
-          type: 'PROGRAMMING',
-          title: q.name || 'Programming Question'
+          type: 'PROGRAMMING', qid: q.programming_question_id, name: q.name || 'Programming Question', weight: Number(q.weightage) || 1
         })),
         ...(segmentWithQuestions?.mcq_questions || []).map(q => ({
-          id: q.mcq_question_id,
-          type: 'MCQ',
-          title: q.name || 'MCQ Question'
+          type: 'MCQ', qid: q.mcq_question_id, name: q.name || 'MCQ Question', weight: Number(q.weightage) || 1
         }))
       ];
-      segmentDetails.push({
-        id: segment.id,
-        name: segment.name,
-        questions
+    }
+
+    // Per-candidate assigned questions (ordered) + the number of question columns
+    // each segment needs (the max questions answered by any candidate in it).
+    const assignmentMap = {};               // `${mappingId}:${segmentId}` -> [{ type, qid }]
+    const segmentsWithAssignments = new Set();
+    const segmentSlotCount = {};            // segmentId -> question column count
+    if (mappingIds.length > 0) {
+      const [assignRows] = await pool.execute(
+        `SELECT assessment_user_mapping_id, assessment_segment_id, question_type, question_id, weightage, sequence_order
+         FROM user_question_assignments
+         WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})
+         ORDER BY assessment_segment_id, assessment_user_mapping_id, sequence_order, id`,
+        mappingIds
+      );
+      assignRows.forEach(r => {
+        const key = `${r.assessment_user_mapping_id}:${r.assessment_segment_id}`;
+        (assignmentMap[key] = assignmentMap[key] || []).push({
+          type: r.question_type,
+          qid: r.question_id,
+          weight: Number(r.weightage) || 1
+        });
+        segmentsWithAssignments.add(r.assessment_segment_id);
+      });
+      Object.entries(assignmentMap).forEach(([key, list]) => {
+        const segId = Number(key.split(':')[1]);
+        segmentSlotCount[segId] = Math.max(segmentSlotCount[segId] || 0, list.length);
       });
     }
+    // Segments without per-candidate assignments fall back to the full pool size.
+    segments.forEach(segment => {
+      if (!segmentsWithAssignments.has(segment.id)) {
+        segmentSlotCount[segment.id] = (poolListBySegment[segment.id] || []).length;
+      }
+    });
+
+    // Ordered question list to render for a given candidate + segment.
+    const getAssignedList = (mappingId, segmentId) =>
+      assignmentMap[`${mappingId}:${segmentId}`] || poolListBySegment[segmentId] || [];
 
     const baseHeaders = [
       'Name',
@@ -922,6 +997,7 @@ const downloadAssessmentReport = async (req, res) => {
       'Status',
       'Score (%)',
       'Time Remaining',
+      'Overall Time Taken (mm:ss:ms)',
       'Attempt Start Time',
       'Attempt End Time',
       'Refresh Violation Count',
@@ -939,37 +1015,78 @@ const downloadAssessmentReport = async (req, res) => {
       merges.push({ s: { r: 0, c: index }, e: { r: 1, c: index } });
     });
 
-    segmentDetails.forEach(segment => {
+    segments.forEach(segment => {
       const segmentStartCol = currentCol;
-      const questions = segment.questions;
+      const slotCount = segmentSlotCount[segment.id] || 0;
+      // Segment-level columns: existing time remaining + new time taken.
       headerRow1.push(segment.name);
       headerRow2.push('Segment Time Remaining');
       currentCol += 1;
-      questions.forEach(question => {
-        headerRow1.push(segment.name);
-        const questionLabel = question.type === 'PROGRAMMING'
-          ? `${question.title} (Passed/Total)`
-          : question.title;
-        headerRow2.push(questionLabel);
-        currentCol += 1;
-      });
-      if (questions.length > 0) {
-        merges.push({
-          s: { r: 0, c: segmentStartCol },
-          e: { r: 0, c: currentCol - 1 }
+      headerRow1.push(segment.name);
+      headerRow2.push('Segment Time Taken (mm:ss:ms)');
+      currentCol += 1;
+      // Positional question columns (sized to how many questions a candidate answers).
+      // Each slot has 4 columns (time taken, question statement, answer given, score).
+      for (let slot = 1; slot <= slotCount; slot += 1) {
+        const qNo = `Q${slot}`;
+        const subLabels = [
+          `${qNo} Time Taken (mm:ss:ms)`,
+          `${qNo} Question Statement`,
+          `${qNo} Answer Given`,
+          `${qNo} Score`
+        ];
+        subLabels.forEach(label => {
+          headerRow1.push(segment.name);
+          headerRow2.push(label);
+          currentCol += 1;
         });
       }
+      // Merge the segment name across its whole block (always >= 2 segment columns).
+      merges.push({
+        s: { r: 0, c: segmentStartCol },
+        e: { r: 0, c: currentCol - 1 }
+      });
     });
 
     headerRow1.push('Total Score');
     headerRow2.push('');
     merges.push({ s: { r: 0, c: currentCol }, e: { r: 1, c: currentCol } });
 
-    const mappingIds = mappingRows.map(row => row.id);
     const segmentAttemptMap = {};
     const segmentTimeRemainingMap = {};
+    const segmentTimeTakenMsMap = {};   // `${mappingId}:${segmentId}` -> ms actively spent on its questions
+    const overallTimeTakenMsMap = {};   // mappingId -> total ms across all questions
     const mcqSubmissionMap = {};
     const programmingSubmissionMap = {};
+    const optionTextMap = {};           // optionId -> option text (for "answer given")
+    const optionOwnerMcq = {};          // optionId -> owning mcq_multiselect_questions.id
+    const optionsByMcq = {};            // mcq.id -> Set(optionId) for that question
+    const mcqMeta = {};                 // mcq.id -> { name, mcqId, baseId }
+    const progMeta = {};                // programming_questions.id -> { name }
+    // Candidate's MCQ answer attributed to the question it actually belongs to.
+    // Answers are matched by the owning question of the selected option (globally
+    // unique), so a row mis-stored under the wrong question id is still recovered.
+    const mcqAnswerByOwner = {};        // `${mappingId}:${ownerMcqId}` -> { score, selected, time_ms }
+
+    // Every MCQ / programming question id that can appear in a candidate's columns.
+    const assignedMcqIds = new Set();
+    const assignedProgIds = new Set();
+    const collectQids = (list) => (list || []).forEach(a => {
+      if (a.type === 'MCQ') assignedMcqIds.add(a.qid);
+      else if (a.type === 'PROGRAMMING') assignedProgIds.add(a.qid);
+    });
+    Object.values(assignmentMap).forEach(collectQids);
+    Object.values(poolListBySegment).forEach(collectQids);
+
+    const addTimeTaken = (mappingId, segmentId, ms) => {
+      const value = Number(ms) || 0;
+      if (value <= 0) return;
+      overallTimeTakenMsMap[mappingId] = (overallTimeTakenMsMap[mappingId] || 0) + value;
+      if (segmentId !== null && segmentId !== undefined) {
+        const key = `${mappingId}:${segmentId}`;
+        segmentTimeTakenMsMap[key] = (segmentTimeTakenMsMap[key] || 0) + value;
+      }
+    };
 
     if (mappingIds.length > 0) {
       const [segmentCounts] = await pool.execute(
@@ -996,18 +1113,30 @@ const downloadAssessmentReport = async (req, res) => {
       });
 
       const [mcqRows] = await pool.execute(
-        `SELECT assessment_user_mapping_id, mcq_question_id, best_score
+        `SELECT assessment_user_mapping_id, assessment_segment_id, mcq_question_id,
+                best_score, time_taken_ms, last_selected_options
          FROM mcq_submissions
          WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
         mappingIds
       );
       mcqRows.forEach(row => {
         const key = `${row.assessment_user_mapping_id}:${row.mcq_question_id}`;
-        mcqSubmissionMap[key] = row.best_score;
+        let selected = row.last_selected_options;
+        if (typeof selected === 'string') {
+          try { selected = JSON.parse(selected); } catch (e) { selected = []; }
+        }
+        mcqSubmissionMap[key] = {
+          score: row.best_score,
+          time_ms: row.time_taken_ms ?? 0,
+          selected: Array.isArray(selected) ? selected : []
+        };
+        addTimeTaken(row.assessment_user_mapping_id, row.assessment_segment_id, row.time_taken_ms);
       });
 
       const [progRows] = await pool.execute(
-        `SELECT assessment_user_mapping_id, programming_question_id, best_score, best_test_cases_passed, test_cases_total
+        `SELECT assessment_user_mapping_id, assessment_segment_id, programming_question_id,
+                best_score, best_test_cases_passed, test_cases_total, time_taken_ms,
+                last_submitted_code, best_submitted_code
          FROM programming_submissions
          WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
         mappingIds
@@ -1017,8 +1146,74 @@ const downloadAssessmentReport = async (req, res) => {
         programmingSubmissionMap[key] = {
           score: row.best_score,
           passed: row.best_test_cases_passed ?? 0,
-          total: row.test_cases_total ?? 0
+          total: row.test_cases_total ?? 0,
+          time_ms: row.time_taken_ms ?? 0,
+          code: row.best_submitted_code || row.last_submitted_code || ''
         };
+        addTimeTaken(row.assessment_user_mapping_id, row.assessment_segment_id, row.time_taken_ms);
+      });
+
+      // Resolve MCQ statements. Assigned ids are always mcq_multiselect_questions.id,
+      // so key strictly by mcq.id (keying by base id too caused collisions where one
+      // question's base id equals another question's mcq id -> wrong statement/answer).
+      if (assignedMcqIds.size > 0) {
+        const ids = Array.from(assignedMcqIds);
+        const placeholders = ids.map(() => '?').join(',');
+        const [metaRows] = await pool.execute(
+          `SELECT mq.id AS mcq_id, mq.question_id AS base_id, q.name
+           FROM mcq_multiselect_questions mq
+           JOIN questions q ON mq.question_id = q.id
+           WHERE mq.id IN (${placeholders})`,
+          ids
+        );
+        const mcqIds = new Set();
+        metaRows.forEach(r => {
+          mcqMeta[r.mcq_id] = { name: r.name, mcqId: r.mcq_id, baseId: r.base_id };
+          mcqIds.add(r.mcq_id);
+        });
+        if (mcqIds.size > 0) {
+          const optIds = Array.from(mcqIds);
+          const [optionRows] = await pool.execute(
+            `SELECT id, text, mcq_multiselect_question_id FROM options
+             WHERE mcq_multiselect_question_id IN (${optIds.map(() => '?').join(',')})`,
+            optIds
+          );
+          optionRows.forEach(o => {
+            optionTextMap[o.id] = o.text;
+            optionOwnerMcq[o.id] = o.mcq_multiselect_question_id;
+            (optionsByMcq[o.mcq_multiselect_question_id] = optionsByMcq[o.mcq_multiselect_question_id] || new Set()).add(o.id);
+          });
+        }
+      }
+
+      // Resolve programming question statements.
+      if (assignedProgIds.size > 0) {
+        const ids = Array.from(assignedProgIds);
+        const [metaRows] = await pool.execute(
+          `SELECT pq.id AS pid, q.name
+           FROM programming_questions pq
+           JOIN questions q ON pq.question_id = q.id
+           WHERE pq.id IN (${ids.map(() => '?').join(',')})`,
+          ids
+        );
+        metaRows.forEach(r => { progMeta[r.pid] = { name: r.name }; });
+      }
+
+      // Attribute each MCQ answer to its real question via the owning question of the
+      // selected option(s). This recovers answers that were stored under a different
+      // question id and prevents an answer from being shown against the wrong question.
+      Object.entries(mcqSubmissionMap).forEach(([key, sub]) => {
+        const mappingId = key.split(':')[0];
+        let owner = null;
+        for (const oid of (sub.selected || [])) {
+          if (optionOwnerMcq[oid] !== undefined) { owner = optionOwnerMcq[oid]; break; }
+        }
+        if (owner === null) return; // no identifiable selection (blank / attempted only)
+        const ownerKey = `${mappingId}:${owner}`;
+        const prev = mcqAnswerByOwner[ownerKey];
+        if (!prev || (Number(sub.score) || 0) >= (Number(prev.score) || 0)) {
+          mcqAnswerByOwner[ownerKey] = sub;
+        }
       });
     }
 
@@ -1035,6 +1230,7 @@ const downloadAssessmentReport = async (req, res) => {
           ? Number(row.percentage_score)
           : '',
         formatDurationMinutes(row.time_remaining),
+        formatDurationMs(overallTimeTakenMsMap[row.id]),
         formatDateTime(row.assessment_started_time),
         formatDateTime(row.assessment_ended_time || row.submitted_at),
         row.refresh_violation_count ?? 'NA',
@@ -1043,31 +1239,80 @@ const downloadAssessmentReport = async (req, res) => {
         segmentAttemptMap[row.id] || 0
       ];
 
-      segmentDetails.forEach(segment => {
+      // Accumulate the overall score from the questions actually assigned to this
+      // candidate so the totals always match the per-question scores shown (and never
+      // exceed the max from stale/duplicate submission rows).
+      let rowObtained = 0;
+      let rowMax = 0;
+
+      segments.forEach(segment => {
         const segmentKey = `${row.id}:${segment.id}`;
         dataRow.push(formatDurationMinutes(segmentTimeRemainingMap[segmentKey]));
-        segment.questions.forEach(question => {
-          const key = `${row.id}:${question.id}`;
-          if (question.type === 'PROGRAMMING') {
-            const submission = programmingSubmissionMap[key];
+        dataRow.push(formatDurationMs(segmentTimeTakenMsMap[segmentKey]));
+
+        const slotCount = segmentSlotCount[segment.id] || 0;
+        const assigned = getAssignedList(row.id, segment.id);
+        for (let slot = 0; slot < slotCount; slot += 1) {
+          const a = assigned[slot];
+          // Candidate has no question in this positional slot (assigned fewer) -> blank.
+          if (!a) { dataRow.push('', '', '', ''); continue; }
+
+          rowMax += Number(a.weight) || 1;
+
+          if (a.type === 'PROGRAMMING') {
+            const submission = programmingSubmissionMap[`${row.id}:${a.qid}`];
+            const progScore = submission && submission.score !== null && submission.score !== undefined
+              ? Number(submission.score) : null;
+            if (progScore !== null) rowObtained += progScore;
+            // Time taken
+            dataRow.push(submission ? formatDurationMs(submission.time_ms) : '');
+            // Question statement
+            dataRow.push(progMeta[a.qid]?.name || a.name || '');
+            // Answer given (the submitted code)
+            dataRow.push(submission?.code || '');
+            // Score (with passed/total when available)
             if (submission && submission.total > 0) {
-              const scoreValue = submission.score !== null && submission.score !== undefined
-                ? Number(submission.score).toFixed(2)
-                : '0.00';
+              const scoreValue = progScore !== null ? progScore.toFixed(2) : '0.00';
               dataRow.push(`${scoreValue} (${submission.passed}/${submission.total})`);
-            } else if (submission && submission.score !== null && submission.score !== undefined) {
-              dataRow.push(Number(submission.score).toFixed(2));
+            } else if (progScore !== null) {
+              dataRow.push(progScore.toFixed(2));
             } else {
               dataRow.push('');
             }
           } else {
-            const score = mcqSubmissionMap[key];
-            dataRow.push(score !== null && score !== undefined ? Number(score).toFixed(2) : '');
+            // MCQ: attribute the answer to this question via the owning question of the
+            // selected option (robust to answers stored under a different question id).
+            // Fall back to id-keyed lookup (covers attempted-but-blank rows).
+            const meta = mcqMeta[a.qid] || {};
+            const submission = mcqAnswerByOwner[`${row.id}:${a.qid}`]
+              || mcqSubmissionMap[`${row.id}:${meta.baseId}`]
+              || mcqSubmissionMap[`${row.id}:${a.qid}`];
+            const optSet = optionsByMcq[a.qid];
+            // Only show selected options that actually belong to this question.
+            const validSelected = (submission?.selected || [])
+              .filter(id => !optSet || optSet.has(Number(id)));
+            const mcqScore = submission && submission.score !== null && submission.score !== undefined
+              ? Number(submission.score) : null;
+            if (mcqScore !== null) rowObtained += mcqScore;
+            // Time taken
+            dataRow.push(submission ? formatDurationMs(submission.time_ms) : '');
+            // Question statement
+            dataRow.push(meta.name || a.name || '');
+            // Answer given (selected option text(s))
+            dataRow.push(validSelected.length > 0
+              ? validSelected.map(id => stripHtml(optionTextMap[id]) ?? id).join(', ')
+              : '');
+            // Score
+            dataRow.push(mcqScore !== null ? mcqScore.toFixed(2) : '');
           }
-        });
+        }
       });
 
-      dataRow.push(row.total_score ?? '');
+      // Overwrite Score (%) and Total Score with values derived from the assigned
+      // questions above so the report is internally consistent.
+      const rowTotal = Math.max(0, rowObtained);
+      dataRow[6] = rowMax > 0 ? parseFloat((rowTotal / rowMax * 100).toFixed(2)) : 0;
+      dataRow.push(parseFloat(rowTotal.toFixed(2)));
       sheet2Rows.push(dataRow);
     });
 
@@ -1309,9 +1554,13 @@ const getStartInfo = async (req, res) => {
       display_name: admin.display_name,
       assessment_title: admin.assessment_title,
       total_duration: admin.timing_config?.total_time || 0,
+      timing_mode: admin.timing_config?.timing_mode || 'OVERALL',
+      start_date_time: admin.timing_config?.start_date_time || null,
+      end_date_time: admin.timing_config?.end_date_time || null,
       segment_count: segments.length,
       total_questions: totalQuestions,
       threshold_for_pass: admin.scoring_config?.threshold_for_pass || 40,
+      threshold_type: admin.scoring_config?.threshold_type || 'PERCENTAGE',
       instruction_page: admin.instruction_page,
       requires_access_code: !!admin.access_config?.access_code,
       proctoring_enabled: admin.proctoring_config?.proctoring_enabled || false,
@@ -1323,8 +1572,12 @@ const getStartInfo = async (req, res) => {
       allow_back_navigation: admin.timing_config?.allow_early_segment_submit !== false, // Default true
       negative_marking_enabled: admin.scoring_config?.negative_marking_enabled || false,
       negative_mark_percentage: admin.scoring_config?.negative_mark_percentage || 0,
+      fetch_random_question: admin.question_config?.fetch_random_question || false,
+      randomize_question_to_users: admin.question_config?.randomize_question_to_users || false,
       allow_resume: admin.access_config?.allow_resume !== false, // Default true
       resume_window_minutes: admin.access_config?.resume_window_minutes || 30,
+      max_attempts: admin.access_config?.max_attempts || 1,
+      ip_restriction: admin.access_config?.ip_restriction || null,
       segments: segments.map(segment => ({
         id: segment.id,
         name: segment.name,
@@ -1363,6 +1616,12 @@ const startAssessment = async (req, res) => {
     const accessConfig = await AccessConfig.findByAdminId(mapping.assessment_administrator_id);
     if (accessConfig?.access_code && accessConfig.access_code !== access_code) {
       return res.status(400).json({ error: 'Invalid access code' });
+    }
+
+    // Enforce IP restriction if configured
+    const clientIp = req.ip || req.connection?.remoteAddress;
+    if (!isIpAllowed(clientIp, accessConfig?.ip_restriction)) {
+      return res.status(403).json({ error: 'Access from your network is not allowed for this assessment' });
     }
 
     const result = await AssessmentUserMapping.startAssessment(mapping_id, {
@@ -1406,6 +1665,12 @@ const getAssessmentTake = async (req, res) => {
     // If not in progress, start it first
     if (mapping.status !== 'IN_PROGRESS') {
       try {
+        // Enforce IP restriction on auto-start as well
+        const accessConfigForIp = await AccessConfig.findByAdminId(mapping.assessment_administrator_id);
+        const clientIp = req.ip || req.connection?.remoteAddress;
+        if (!isIpAllowed(clientIp, accessConfigForIp?.ip_restriction)) {
+          return res.status(403).json({ error: 'Access from your network is not allowed for this assessment' });
+        }
         await AssessmentUserMapping.startAssessment(mapping_id, {
           ip_address: req.ip || req.connection.remoteAddress,
           browser_info: req.headers['user-agent']
@@ -1645,7 +1910,18 @@ const getAssessmentTake = async (req, res) => {
             `SELECT id, text as option_text, \`order\` FROM options WHERE mcq_multiselect_question_id = ? ORDER BY \`order\` ASC`,
             [mqRows[0].id]
           );
-          
+
+          let mcqOptions = optionRows.map(opt => ({
+            id: opt.id,
+            value: opt.id,
+            text: opt.option_text
+          }));
+          // Hardening: shuffle option order per candidate so a shared screen/answer key
+          // (e.g. "the answer is option B") isn't reusable across students.
+          if (config.shuffle_options_in_mcq) {
+            mcqOptions = seededShuffle(mcqOptions, `${mapping_id}-${mqRows[0].id}`);
+          }
+
           questions.push({
             ...mqRows[0],
             question_type: 'MCQ',
@@ -1656,11 +1932,7 @@ const getAssessmentTake = async (req, res) => {
             positive_marks: mqRows[0].positive_marks || mqRows[0].points || 0,
             negative_marks: mqRows[0].negative_marks || 0,
             neutral_marks: mqRows[0].neutral_marks || 0,
-            options: optionRows.map(opt => ({
-              id: opt.id,
-              value: opt.id,
-              text: opt.option_text
-            }))
+            options: mcqOptions
           });
         }
       }
@@ -1676,6 +1948,24 @@ const getAssessmentTake = async (req, res) => {
     const startMs = startTime.getTime();
     const elapsedSeconds = Number.isFinite(startMs) ? Math.floor((now - startTime) / 1000) : 0;
     const timeRemaining = Math.max(0, totalDuration - elapsedSeconds);
+
+    // Server-side backstop for auto-submit on timeout. If the overall wall-clock limit
+    // (plus any grace period) has passed and the config requests auto-submit, finalize the
+    // attempt server-side so a candidate cannot keep working by ignoring the client timer.
+    const autoSubmitOnTimeout = admin.timing_config?.auto_submit_on_timeout !== false; // default true
+    const gracePeriodSeconds = admin.timing_config?.grace_period_seconds || 0;
+    if (autoSubmitOnTimeout && totalDuration > 0 && elapsedSeconds > (totalDuration + gracePeriodSeconds)) {
+      try {
+        const submitResult = await AssessmentUserMapping.submitAssessment(mapping_id);
+        return res.json({
+          auto_submitted: true,
+          message: 'Time has expired; the assessment was automatically submitted.',
+          result: submitResult
+        });
+      } catch (e) {
+        console.error('Auto-submit on timeout failed:', e);
+      }
+    }
 
     // Calculate segment time remaining if segment-wise timing
     let segmentTimeRemaining = 0;
@@ -1945,6 +2235,41 @@ const getAssessmentResult = async (req, res) => {
       ? currentViolationCount + (maxTabSwitchAllowed * (refreshViolationCount - 1))
       : currentViolationCount;
 
+    // Attribute each MCQ answer to the question it actually belongs to using the owning
+    // question of the selected option (option ids are globally unique). This recovers
+    // answers that were stored under a different question id and keeps the per-question
+    // scores/answers consistent with the downloadable report.
+    const [allMcqSubs] = await pool.execute(
+      'SELECT mcq_question_id, best_score, last_selected_options FROM mcq_submissions WHERE assessment_user_mapping_id = ?',
+      [mapping_id]
+    );
+    const allOptionIds = new Set();
+    const parsedMcqSubs = allMcqSubs.map(s => {
+      let sel = s.last_selected_options;
+      if (typeof sel === 'string') { try { sel = JSON.parse(sel); } catch (e) { sel = []; } }
+      sel = Array.isArray(sel) ? sel.map(Number).filter(n => !isNaN(n)) : [];
+      sel.forEach(id => allOptionIds.add(id));
+      return { ...s, sel };
+    });
+    const ownerByOpt = {};
+    const optTextById = {};
+    if (allOptionIds.size > 0) {
+      const ids = Array.from(allOptionIds);
+      const [orows] = await pool.execute(
+        `SELECT id, text, mcq_multiselect_question_id FROM options WHERE id IN (${ids.map(() => '?').join(',')})`,
+        ids
+      );
+      orows.forEach(o => { ownerByOpt[o.id] = o.mcq_multiselect_question_id; optTextById[o.id] = o.text; });
+    }
+    const mcqByOwner = {}; // owning mcq.id -> { best_score, sel }
+    parsedMcqSubs.forEach(s => {
+      let owner = null;
+      for (const oid of s.sel) { if (ownerByOpt[oid] !== undefined) { owner = ownerByOpt[oid]; break; } }
+      if (owner === null) return;
+      const prev = mcqByOwner[owner];
+      if (!prev || (Number(s.best_score) || 0) >= (Number(prev.best_score) || 0)) mcqByOwner[owner] = s;
+    });
+
     // Enhance segment progress with detailed question data
     const detailedSegmentProgress = await Promise.all(segmentProgress.map(async (segment) => {
       // Get questions assigned to this user for this segment
@@ -1952,36 +2277,80 @@ const getAssessmentResult = async (req, res) => {
       
       // Get submissions for these questions
       const enhancedQuestions = await Promise.all(questions.map(async (q) => {
-        let submission = null;
         if (q.question_type === 'PROGRAMMING') {
-          submission = await ProgrammingSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
-        } else {
+          const submission = await ProgrammingSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+          return {
+            ...q,
+            is_attempted: !!submission,
+            submitted_code: submission?.best_submitted_code,
+            language_used: submission?.language_used,
+            test_cases_passed: submission?.best_test_cases_passed,
+            test_cases_total: submission?.test_cases_total,
+            user_answer: null,
+            score: submission?.best_score || 0
+          };
+        }
+
+        // MCQ: prefer the answer attributed by option ownership; fall back to an
+        // id-keyed lookup (covers attempted-but-unanswered rows).
+        const owned = mcqByOwner[q.question_id];
+        let selIds = owned ? owned.sel : [];
+        let score = owned ? owned.best_score : null;
+        let attempted = !!owned;
+        if (!owned) {
           const resolvedQuestionId = await MCQSubmission.resolveQuestionId(q.question_id);
-          submission = await MCQSubmission.findByAssessmentAndQuestion(mapping_id, resolvedQuestionId);
+          const [subRows] = await pool.execute(
+            `SELECT * FROM mcq_submissions
+             WHERE assessment_user_mapping_id = ? AND mcq_question_id IN (?, ?)
+             ORDER BY best_score DESC, last_answered_at DESC, id DESC
+             LIMIT 1`,
+            [mapping_id, resolvedQuestionId, q.question_id]
+          );
+          const sub = subRows[0] || null;
+          if (sub) {
+            attempted = true;
+            score = sub.best_score;
+            let sel = sub.last_selected_options;
+            if (typeof sel === 'string') { try { sel = JSON.parse(sel); } catch (e) { sel = []; } }
+            selIds = Array.isArray(sel) ? sel.map(Number).filter(n => !isNaN(n)) : [];
+          }
         }
 
         return {
           ...q,
-          is_attempted: !!submission,
-          submitted_code: submission?.best_submitted_code,
-          language_used: submission?.language_used,
-          test_cases_passed: submission?.best_test_cases_passed,
-          test_cases_total: submission?.test_cases_total,
-          user_answer: submission?.last_selected_options ? 
-            (typeof submission.last_selected_options === 'string' ? JSON.parse(submission.last_selected_options) : submission.last_selected_options).join(', ') : null,
-          score: submission?.best_score || 0
+          is_attempted: attempted,
+          user_answer: selIds.length ? selIds.map(id => stripHtml(optTextById[id]) ?? id).join(', ') : null,
+          score: Number(score) || 0
         };
       }));
 
+      // Derive the segment totals from the questions actually assigned to this
+      // candidate so the per-question scores always add up to the segment score
+      // (stale/duplicate submission rows from other question sets are ignored).
+      const segObtained = enhancedQuestions.reduce((sum, q) => sum + (Number(q.score) || 0), 0);
+      const segMax = enhancedQuestions.reduce((sum, q) => sum + (Number(q.weightage) || 1), 0);
+      const segAttempted = enhancedQuestions.filter(q => q.is_attempted).length;
+
       return {
         ...segment,
+        score: segObtained,
+        max_score: segMax,
+        attempted_questions: segAttempted,
+        total_questions: enhancedQuestions.length,
         questions: enhancedQuestions
       };
     }));
 
+    // Keep the overall score consistent with the (assigned) per-segment scores above.
+    const derivedTotalScore = detailedSegmentProgress.reduce((sum, seg) => sum + (Number(seg.score) || 0), 0);
+    const derivedMaxScore = detailedSegmentProgress.reduce((sum, seg) => sum + (Number(seg.max_score) || 0), 0);
+    const derivedPercentage = derivedMaxScore > 0 ? (derivedTotalScore / derivedMaxScore * 100) : 0;
+
     res.json({
       mapping: {
         ...mapping,
+        total_score: derivedTotalScore,
+        percentage_score: parseFloat(derivedPercentage.toFixed(2)),
         refresh_violation_count: refreshViolationCount,
         total_violations: totalViolations
       },
@@ -2018,6 +2387,20 @@ const incrementResumeCount = async (req, res) => {
       return res.status(400).json({ error: 'Assessment is not in progress' });
     }
 
+    // Enforce resume policy from access config
+    const accessConfig = await AccessConfig.findByAdminId(mapping.assessment_administrator_id);
+    if (accessConfig && accessConfig.allow_resume === false) {
+      return res.status(403).json({ error: 'Resume is not allowed for this assessment' });
+    }
+    if (accessConfig?.allow_resume !== false && mapping.last_activity_at) {
+      const resumeWindow = accessConfig?.resume_window_minutes || 30;
+      const minutesSinceLastActivity = (Date.now() - new Date(mapping.last_activity_at).getTime()) / (1000 * 60);
+      if (minutesSinceLastActivity > resumeWindow) {
+        await AssessmentUserMapping.updateStatus(mapping_id, 'ABANDONED');
+        return res.status(403).json({ error: 'Resume window has expired' });
+      }
+    }
+
     await AssessmentUserMapping.resume(mapping_id);
     res.json({ message: 'Resume count updated' });
   } catch (error) {
@@ -2050,6 +2433,7 @@ const saveAnswer = async (req, res) => {
 
     let isCorrect = null;
     let score = null;
+    let timeToSolve = null; // configured expected time for this question (seconds), if any
 
     // For MCQ, calculate if the answer is correct
     if (question_type === 'MCQ' && answer) {
@@ -2077,7 +2461,7 @@ const saveAnswer = async (req, res) => {
 
       // Get question marks/weightage
       const [questionInfo] = await pool.execute(
-        `SELECT q.points, smq.positive_marks, smq.negative_marks
+        `SELECT q.points, q.time_to_solve, smq.positive_marks, smq.negative_marks
          FROM mcq_multiselect_questions mq
          JOIN questions q ON mq.question_id = q.id
          LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id
@@ -2088,6 +2472,7 @@ const saveAnswer = async (req, res) => {
       
       const marks = questionInfo[0]?.positive_marks || questionInfo[0]?.points || 1;
       const negativeMarks = questionInfo[0]?.negative_marks || 0;
+      timeToSolve = questionInfo[0]?.time_to_solve ?? null;
 
       // Calculate score (normalized to 1)
       if (isCorrect) {
@@ -2144,6 +2529,22 @@ const saveAnswer = async (req, res) => {
         score: score || 0, // Score is 0 to 1
         max_score: 1
       });
+
+      // Accumulate millisecond-precision time spent on this question (sent as a
+      // delta by the client). Resume-safe because we add to the running total.
+      const deltaMs = Number(req.body.time_taken_ms);
+      if (Number.isFinite(deltaMs) && deltaMs > 0) {
+        try {
+          await pool.execute(
+            `UPDATE mcq_submissions
+             SET time_taken_ms = COALESCE(time_taken_ms, 0) + ?
+             WHERE assessment_user_mapping_id = ? AND mcq_question_id = ?`,
+            [Math.round(deltaMs), mapping_id, resolvedQuestionId]
+          );
+        } catch (e) {
+          // Legacy DB without time_taken_ms column; ignore so answer saving still works.
+        }
+      }
     }
 
     // Update segment score from all submissions
@@ -2155,17 +2556,77 @@ const saveAnswer = async (req, res) => {
       mappingScore = await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
     }
 
+    // ANOMALY DETECTION: flag suspiciously fast correct answers in the proctoring log.
+    // A candidate reading answers from DevTools / an AI overlay (without ever losing focus,
+    // so client-side proctoring never fires) tends to submit correct answers almost
+    // instantly. We measure the gap since the previous answer save (a clean per-question
+    // timing signal, see last_answer_saved_at) and log a RAPID_ANSWER event when a CORRECT
+    // answer arrives faster than a human plausibly could. This never blocks the candidate or
+    // leaks anything to the client — it is purely a server-side flag for reviewers.
+    //
+    // The threshold is derived from each question's configured `time_to_solve` (the expected
+    // time budget set by the author) rather than a single flat number: answering correctly in
+    // a tiny fraction of the allotted time is the real signal. We only fall back to a flat
+    // value for questions that have no time_to_solve configured.
+    if (question_type === 'MCQ' && isCorrect === true) {
+      const SUSPICIOUS_FRACTION = 0.15;          // <15% of allotted time => suspicious
+      const MIN_THRESHOLD_SECONDS = 2;           // floor so tiny budgets don't yield ~0s
+      const FALLBACK_THRESHOLD_SECONDS = 3;      // used when time_to_solve isn't configured
+      const usingTimeToSolve = Number.isFinite(timeToSolve) && timeToSolve > 0;
+      const thresholdSeconds = usingTimeToSolve
+        ? Math.max(MIN_THRESHOLD_SECONDS, Math.round(timeToSolve * SUSPICIOUS_FRACTION))
+        : FALLBACK_THRESHOLD_SECONDS;
+      try {
+        const [timeRows] = await pool.execute(
+          `SELECT TIMESTAMPDIFF(SECOND, COALESCE(last_answer_saved_at, assessment_started_time), NOW()) AS seconds_spent
+           FROM assessment_user_mappings WHERE id = ?`,
+          [mapping_id]
+        );
+        const secondsSpent = timeRows[0]?.seconds_spent;
+        if (secondsSpent !== null && secondsSpent !== undefined && secondsSpent <= thresholdSeconds) {
+          await ProctoringLog.log({
+            assessment_user_mapping_id: mapping_id,
+            event_type: 'RAPID_ANSWER',
+            segment_id,
+            metadata: {
+              question_id,
+              question_type,
+              is_correct: true,
+              seconds_spent: secondsSpent,
+              threshold_seconds: thresholdSeconds,
+              time_to_solve: usingTimeToSolve ? timeToSolve : null,
+              basis: usingTimeToSolve ? 'time_to_solve' : 'fallback',
+              reason: usingTimeToSolve
+                ? `Correct answer submitted in under ${Math.round(SUSPICIOUS_FRACTION * 100)}% of the allotted time`
+                : 'Correct answer submitted faster than humanly plausible'
+            }
+          });
+        }
+      } catch (anomalyErr) {
+        // Anomaly detection must never break answer saving (e.g. legacy table without the
+        // last_answer_saved_at column). Log and continue.
+        console.error('Rapid-answer anomaly check failed:', anomalyErr);
+      }
+    }
+
+    // Record when this answer was saved, used to time the NEXT question. Kept separate from
+    // last_activity_at so periodic progress pings don't pollute the per-question timing.
+    try {
+      await pool.execute(
+        `UPDATE assessment_user_mappings SET last_answer_saved_at = NOW() WHERE id = ?`,
+        [mapping_id]
+      );
+    } catch (e) { /* legacy table without column; safe to ignore */ }
+
     // Update mapping last activity
     await AssessmentUserMapping.updateActivity(mapping_id, {});
 
-    res.json({ 
-      message: 'Answer saved',
-      is_correct: isCorrect,
-      score,
-      segment_score: segmentScore,
-      total_score: mappingScore?.totalScore,
-      percentage_score: mappingScore?.percentageScore
-    });
+    // SECURITY: Do NOT return correctness or running score to the candidate during a live attempt.
+    // Returning is_correct/score lets a student read the Network tab in DevTools and brute-force
+    // answers in real time (no focus change, so client-side proctoring never fires). Scores are
+    // still computed and persisted server-side above; results are revealed only after submission
+    // (and only if the assessment is configured to show them).
+    res.json({ message: 'Answer saved' });
   } catch (error) {
     console.error('Error saving answer:', error);
     res.status(500).json({ error: 'Failed to save answer' });
@@ -2429,6 +2890,21 @@ const submitCode = async (req, res) => {
       execution_result: testResults
     });
 
+    // Accumulate millisecond-precision time spent on this question (client sends a delta).
+    const deltaMs = Number(req.body.time_taken_ms);
+    if (Number.isFinite(deltaMs) && deltaMs > 0) {
+      try {
+        await pool.execute(
+          `UPDATE programming_submissions
+           SET time_taken_ms = COALESCE(time_taken_ms, 0) + ?
+           WHERE assessment_user_mapping_id = ? AND programming_question_id = ?`,
+          [Math.round(deltaMs), mapping_id, question_id]
+        );
+      } catch (e) {
+        // Legacy DB without time_taken_ms column; ignore.
+      }
+    }
+
     // Update segment score from all submissions
     let segmentScore = null;
     let mappingScore = null;
@@ -2549,9 +3025,14 @@ const switchSegment = async (req, res) => {
       return res.status(400).json({ error: 'Invalid segment index' });
     }
 
-    // Check timing config for segment navigation restrictions
-    const timingConfig = await TimingConfig.findByAdminId(mapping.assessment_administrator_id);
-    
+    // Enforce inter-segment navigation policy. When disabled, candidates cannot jump
+    // between segments (segments lock once completed; forward progress uses "next segment").
+    const proctoringConfig = await ProctoringConfig.findByAdminId(mapping.assessment_administrator_id);
+    const allowSegmentSwitch = proctoringConfig?.allow_segment_switch !== false; // default true
+    if (!allowSegmentSwitch && Number(segment_index) !== Number(mapping.current_segment_index)) {
+      return res.status(403).json({ error: 'Segment navigation is disabled for this assessment' });
+    }
+
     // Update current segment index
     await AssessmentUserMapping.updateSegmentIndex(mapping_id, segment_index);
 
@@ -2584,10 +3065,51 @@ const switchSegment = async (req, res) => {
 };
 
 
+// Deterministic seeded shuffle: stable per (user attempt + question) so a candidate sees a
+// consistent order across reloads/resumes, but different candidates get different orders.
+// MCQ answers are stored/scored by option id, so reordering the display is always safe.
+const seededShuffle = (array, seedStr) => {
+  const arr = [...array];
+  // xmur3 string hash -> 32-bit seed
+  let h = 1779033703 ^ String(seedStr).length;
+  for (let i = 0; i < String(seedStr).length; i++) {
+    h = Math.imul(h ^ String(seedStr).charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let seed = (h ^= h >>> 16) >>> 0;
+  // mulberry32 PRNG
+  const rand = () => {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
+
 // Helper function to get segment questions
 const getSegmentQuestions = async (segmentId, mappingId) => {
   const assignments = await UserQuestionAssignment.getByMappingAndSegment(mappingId, segmentId);
   const questions = [];
+
+  // Load whether MCQ options should be shuffled for this assessment
+  let shuffleOptionsInMcq = false;
+  try {
+    const [cfgRows] = await pool.execute(
+      `SELECT qc.shuffle_options_in_mcq
+       FROM question_configs qc
+       JOIN assessment_user_mappings aum ON aum.assessment_administrator_id = qc.assessment_administrator_id
+       WHERE aum.id = ?`,
+      [mappingId]
+    );
+    shuffleOptionsInMcq = !!(cfgRows[0] && cfgRows[0].shuffle_options_in_mcq);
+  } catch (e) {
+    shuffleOptionsInMcq = false;
+  }
 
   for (const assignment of assignments) {
     if (assignment.question_type === 'PROGRAMMING') {
@@ -2647,6 +3169,15 @@ const getSegmentQuestions = async (segmentId, mappingId) => {
           [mqRows[0].id]
         );
 
+        let mcqOptions = optionRows.map(opt => ({
+          id: opt.id,
+          value: opt.id,
+          text: opt.option_text
+        }));
+        if (shuffleOptionsInMcq) {
+          mcqOptions = seededShuffle(mcqOptions, `${mappingId}-${mqRows[0].id}`);
+        }
+
         questions.push({
           ...mqRows[0],
           question_type: 'MCQ',
@@ -2654,11 +3185,7 @@ const getSegmentQuestions = async (segmentId, mappingId) => {
           question_text: mqRows[0].name || mqRows[0].description,
           sequence_order: assignment.sequence_order,
           weightage: assignment.weightage,
-          options: optionRows.map(opt => ({
-            id: opt.id,
-            value: opt.id,
-            text: opt.option_text
-          }))
+          options: mcqOptions
         });
       }
     }

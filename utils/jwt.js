@@ -9,15 +9,18 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET + '-refresh';
 const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || '15m'; // 15 minutes default
+const REMEMBER_ME_ACCESS_TOKEN_EXPIRES_IN =
+  process.env.REMEMBER_ME_ACCESS_TOKEN_EXPIRES_IN || '24h'; // longer access when "Remember me"
 const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d'; // 7 days default
 const REMEMBER_ME_REFRESH_TOKEN_EXPIRES_IN = process.env.REMEMBER_ME_REFRESH_TOKEN_EXPIRES_IN || '30d'; // 30 days for remember me
 
 /**
- * Generate an access token (short-lived)
+ * Generate an access token
  * @param {Object} user - User object with id, email, role, etc.
+ * @param {boolean} rememberMe - Longer-lived access token (paired with extended refresh)
  * @returns {string} JWT access token
  */
-function generateAccessToken(user) {
+function generateAccessToken(user, rememberMe = false) {
   const payload = {
     id: user.id,
     email: user.email,
@@ -31,7 +34,7 @@ function generateAccessToken(user) {
   };
 
   return jwt.sign(payload, JWT_SECRET, {
-    expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    expiresIn: rememberMe ? REMEMBER_ME_ACCESS_TOKEN_EXPIRES_IN : ACCESS_TOKEN_EXPIRES_IN,
     issuer: 'lnd-backend',
     audience: 'lnd-frontend'
   });
@@ -94,7 +97,7 @@ function getRefreshTokenExpiration(rememberMe = false) {
  * @returns {Object} { accessToken, refreshToken, refreshTokenExpiration }
  */
 function generateTokens(user, rememberMe = false) {
-  const accessToken = generateAccessToken(user);
+  const accessToken = generateAccessToken(user, rememberMe);
   const refreshToken = generateRefreshToken(user, rememberMe);
   const refreshTokenExpiration = getRefreshTokenExpiration(rememberMe);
   

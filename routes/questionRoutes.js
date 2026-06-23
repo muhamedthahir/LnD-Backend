@@ -39,6 +39,10 @@ router.post('/:id/remove-from-bank', authenticate, authorize('primary_admin', 'c
 router.get('/bulk-upload/mcq/template', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.downloadBulkMcqTemplate);
 router.post('/bulk-upload/mcq', authenticate, authorize('primary_admin', 'college_admin'), upload.single('file'), QuestionController.uploadBulkMcqQuestions);
 
+// Bulk upload for Programming questions
+router.get('/bulk-upload/programming/template', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.downloadBulkProgrammingTemplate);
+router.post('/bulk-upload/programming', authenticate, authorize('primary_admin', 'college_admin'), upload.single('file'), QuestionController.uploadBulkProgrammingQuestions);
+
 module.exports = router;
 
 

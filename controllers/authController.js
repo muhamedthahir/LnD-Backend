@@ -134,8 +134,10 @@ class AuthController {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-      // Generate access and refresh tokens
-      const { accessToken, refreshToken, refreshTokenExpiration } = generateTokens(user, rememberMe === true);
+      // Generate access and refresh tokens (coerce rememberMe — some clients send string "true")
+      const wantRemember =
+        rememberMe === true || rememberMe === 'true' || rememberMe === 1 || rememberMe === '1';
+      const { accessToken, refreshToken, refreshTokenExpiration } = generateTokens(user, wantRemember);
 
       // Store refresh token in database
       try {
@@ -165,8 +167,6 @@ class AuthController {
         'Pragma': 'no-cache',
         'Expires': '0'
       });
-
-      console.log('User logged in successfully. User ID:', user.id, 'Remember Me:', rememberMe);
 
       clearTimeout(timeoutId);
       
@@ -385,8 +385,11 @@ class AuthController {
         return res.status(401).json({ error: 'User not found' });
       }
 
-      // Generate new access token
-      const accessToken = generateAccessToken(user);
+      // Match access-token lifetime to how the refresh session was created (~7d vs ~30d "remember me")
+      const expMs = new Date(storedToken.expires_at).getTime()
+      const daysLeft = (expMs - Date.now()) / (86400000)
+      const extendedRefreshSession = daysLeft > 14
+      const accessToken = generateAccessToken(user, extendedRefreshSession)
 
       return res.json({
         accessToken,
