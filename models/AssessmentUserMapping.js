@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
+const { resolveSegmentQuestionWeight } = require('../utils/assessmentScoring');
+const { AssessmentSegmentProgress } = require('./AssessmentConfigs');
 
 class AssessmentUserMapping {
   /**
@@ -280,12 +282,14 @@ class AssessmentUserMapping {
              aa.display_name as administrator_name,
              a.title as assessment_title, a.description as assessment_description,
              tc.total_time, tc.start_date_time, tc.end_date_time,
+             ac.max_attempts,
              attempt_counts.total_attempts,
              attempt_counts.max_attempt
       FROM assessment_user_mappings aum
       JOIN assessment_administrators aa ON aum.assessment_administrator_id = aa.id
       JOIN assessments a ON aa.assessment_id = a.id
       LEFT JOIN timing_configs tc ON aa.id = tc.assessment_administrator_id
+      LEFT JOIN access_configs ac ON aa.id = ac.assessment_administrator_id
       JOIN (
         SELECT assessment_administrator_id, user_id, 
                COUNT(*) as total_attempts, 
@@ -328,7 +332,8 @@ class AssessmentUserMapping {
     const mappings = rows.map(row => ({
       ...row,
       segment_wise_scores: this.safeJsonParse(row.segment_wise_scores),
-      total_attempts: row.total_attempts || 1,
+      total_attempts: row.total_attempts || 1,   // attempts already used
+      max_attempts: row.max_attempts || 1,        // attempts allowed (from access config)
       current_attempt: row.attempt_number || 1
     }));
 
@@ -485,7 +490,7 @@ class AssessmentUserMapping {
           programmingQuestions = pq.map(q => ({
             question_id: q.programming_question_id,
             sequence_order: q.sequence_order || 1,
-            weightage: q.weightage_override || q.default_weightage || q.positive_marks || 0,
+            weightage: resolveSegmentQuestionWeight(q),
             is_from_random_fetch: false
           }));
         } catch (error) {
@@ -507,7 +512,7 @@ class AssessmentUserMapping {
           mcqQuestions = mq.map(q => ({
             question_id: q.mcq_question_id,
             sequence_order: q.sequence_order || 1,
-            weightage: q.weightage_override || q.default_weightage || q.positive_marks || 0,
+            weightage: resolveSegmentQuestionWeight(q),
             is_from_random_fetch: false
           }));
         } catch (error) {
@@ -559,7 +564,7 @@ class AssessmentUserMapping {
               `INSERT IGNORE INTO user_question_assignments 
                (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
                VALUES (?, ?, 'PROGRAMMING', ?, ?, ?, ?)`,
-              [mapping_id, segment.id, q.question_id, q.sequence_order, 1, q.is_from_random_fetch] // Force weightage to 1
+              [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
             );
           } catch (error) {
             console.error(`Error inserting programming question ${q.question_id} for segment ${segment.id}:`, error);
@@ -572,7 +577,7 @@ class AssessmentUserMapping {
               `INSERT IGNORE INTO user_question_assignments 
                (assessment_user_mapping_id, assessment_segment_id, question_type, question_id, sequence_order, weightage, is_from_random_fetch)
                VALUES (?, ?, 'MCQ', ?, ?, ?, ?)`,
-              [mapping_id, segment.id, q.question_id, q.sequence_order, 1, q.is_from_random_fetch] // Force weightage to 1
+              [mapping_id, segment.id, q.question_id, q.sequence_order, q.weightage, q.is_from_random_fetch]
             );
           } catch (error) {
             console.error(`Error inserting MCQ question ${q.question_id} for segment ${segment.id}:`, error);
@@ -615,6 +620,44 @@ class AssessmentUserMapping {
   }
 
   /**
+   * Count programming vs MCQ questions in a segment's manual pool.
+   */
+  static async getSegmentPoolCounts(segment_id) {
+    const [[prog]] = await pool.execute(
+      'SELECT COUNT(*) as total FROM segment_programming_questions WHERE assessment_segment_id = ?',
+      [segment_id]
+    );
+    const [[mcq]] = await pool.execute(
+      'SELECT COUNT(*) as total FROM segment_mcq_questions WHERE assessment_segment_id = ?',
+      [segment_id]
+    );
+    return {
+      programming: prog?.total || 0,
+      mcq: mcq?.total || 0
+    };
+  }
+
+  /**
+   * Pick the question type for random fetch. Corrects misconfigured criteria
+   * (e.g. MCQ type on a programming-only segment pool).
+   */
+  static resolveQuestionType(criteria, poolCounts, segment = null) {
+    const requested = criteria?.question_type;
+    if (segment?.question_source === 'BANK') {
+      return requested || 'MCQ';
+    }
+    const poolTotal = (poolCounts?.programming || 0) + (poolCounts?.mcq || 0);
+    if (poolTotal === 0) {
+      return requested || 'MCQ';
+    }
+    if (requested === 'PROGRAMMING' && poolCounts.programming > 0) return 'PROGRAMMING';
+    if (requested === 'MCQ' && poolCounts.mcq > 0) return 'MCQ';
+    if (poolCounts.programming > 0 && poolCounts.mcq === 0) return 'PROGRAMMING';
+    if (poolCounts.mcq > 0 && poolCounts.programming === 0) return 'MCQ';
+    return requested || (poolCounts.programming > poolCounts.mcq ? 'PROGRAMMING' : 'MCQ');
+  }
+
+  /**
    * Fetch random questions for a segment
    */
   static async fetchRandomQuestionsForSegment(segment_id, mapping_id) {
@@ -627,6 +670,8 @@ class AssessmentUserMapping {
     );
     const segment = segmentRows[0] || { id: segment_id, question_source: null, question_bank_id: null };
 
+    const poolCounts = await this.getSegmentPoolCounts(segment_id);
+
     // Get random fetch criteria
     const [criteria] = await pool.execute(
       'SELECT * FROM random_fetch_criteria WHERE assessment_segment_id = ? AND is_active = TRUE',
@@ -634,10 +679,17 @@ class AssessmentUserMapping {
     );
 
     for (const c of criteria) {
-      if (c.question_type === 'PROGRAMMING') {
+      const questionType = this.resolveQuestionType(c, poolCounts, segment);
+      if (questionType !== c.question_type) {
+        console.warn(
+          `Segment ${segment_id}: random_fetch_criteria id ${c.id} has question_type=${c.question_type} ` +
+          `but pool has ${poolCounts.programming} programming / ${poolCounts.mcq} MCQ — using ${questionType}`
+        );
+      }
+      if (questionType === 'PROGRAMMING') {
         const questions = await this.fetchRandomProgrammingQuestions(c, mapping_id, segment);
         result.programming = questions;
-      } else if (c.question_type === 'MCQ') {
+      } else if (questionType === 'MCQ') {
         const questions = await this.fetchRandomMCQQuestions(c, mapping_id, segment);
         result.mcq = questions;
       }
@@ -682,11 +734,15 @@ class AssessmentUserMapping {
       return acc;
     }, {});
 
-    let query = `SELECT pq.id, q.points as weightage
+    let query = `SELECT pq.id, q.points as default_weightage,
+                        spq.positive_marks, spq.weightage_override
                  FROM programming_questions pq
                  JOIN questions q ON pq.question_id = q.id
-                 WHERE 1=1`;
-    const params = [];
+                 LEFT JOIN segment_programming_questions spq
+                   ON spq.programming_question_id = pq.id
+                   AND spq.assessment_segment_id = ?`;
+    const params = [segment?.id || criteria.assessment_segment_id];
+    query += ' WHERE 1=1';
 
     const restriction = this.buildSourceRestriction({
       segment,
@@ -725,7 +781,7 @@ class AssessmentUserMapping {
       return rows.map((q, i) => ({
         question_id: q.id,
         sequence_order: i + 1,
-        weightage: q.weightage || 1,
+        weightage: resolveSegmentQuestionWeight(q),
         is_from_random_fetch: true
       }));
     }
@@ -740,7 +796,7 @@ class AssessmentUserMapping {
         questions.push(...rows.map((q, i) => ({
           question_id: q.id,
           sequence_order: questions.length + i + 1,
-          weightage: q.weightage || 1,
+          weightage: resolveSegmentQuestionWeight(q),
           is_from_random_fetch: true
         })));
       }
@@ -804,7 +860,7 @@ class AssessmentUserMapping {
       return rows.map((q, i) => ({
         question_id: q.id,
         sequence_order: i + 1,
-        weightage: q.weightage || 1,
+        weightage: resolveSegmentQuestionWeight(q),
         is_from_random_fetch: true
       }));
     }
@@ -819,7 +875,7 @@ class AssessmentUserMapping {
         questions.push(...rows.map((q, i) => ({
           question_id: q.id,
           sequence_order: questions.length + i + 1,
-          weightage: q.weightage || 1,
+          weightage: resolveSegmentQuestionWeight(q),
           is_from_random_fetch: true
         })));
       }
@@ -906,6 +962,58 @@ class AssessmentUserMapping {
   }
 
   /**
+   * Sync assignment weightages from segment mark overrides (for in-progress attempts).
+   */
+  static async syncAssignmentWeightages(mapping_id) {
+    const [assignments] = await pool.execute(
+      `SELECT id, assessment_segment_id, question_type, question_id, weightage
+       FROM user_question_assignments
+       WHERE assessment_user_mapping_id = ?`,
+      [mapping_id]
+    );
+
+    for (const a of assignments) {
+      let resolved = Number(a.weightage) || 1;
+      if (a.question_type === 'PROGRAMMING') {
+        const [rows] = await pool.execute(
+          `SELECT spq.positive_marks, spq.weightage_override, q.points as default_weightage
+           FROM segment_programming_questions spq
+           JOIN programming_questions pq ON spq.programming_question_id = pq.id
+           JOIN questions q ON pq.question_id = q.id
+           WHERE spq.assessment_segment_id = ? AND pq.id = ?`,
+          [a.assessment_segment_id, a.question_id]
+        );
+        if (rows[0]) resolved = resolveSegmentQuestionWeight(rows[0]);
+      } else if (a.question_type === 'MCQ') {
+        const [rows] = await pool.execute(
+          `SELECT smq.positive_marks, smq.weightage_override, q.points as default_weightage
+           FROM segment_mcq_questions smq
+           JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
+           JOIN questions q ON mq.question_id = q.id
+           WHERE smq.assessment_segment_id = ? AND mq.id = ?`,
+          [a.assessment_segment_id, a.question_id]
+        );
+        if (rows[0]) resolved = resolveSegmentQuestionWeight(rows[0]);
+      }
+      if (resolved !== Number(a.weightage)) {
+        await pool.execute(
+          'UPDATE user_question_assignments SET weightage = ? WHERE id = ?',
+          [resolved, a.id]
+        );
+      }
+    }
+
+    const [maxScore] = await pool.execute(
+      'SELECT SUM(weightage) as total FROM user_question_assignments WHERE assessment_user_mapping_id = ?',
+      [mapping_id]
+    );
+    await pool.execute(
+      'UPDATE assessment_user_mappings SET max_possible_score = ? WHERE id = ?',
+      [maxScore[0]?.total || 0, mapping_id]
+    );
+  }
+
+  /**
    * Submit assessment
    */
   static async submitAssessment(id) {
@@ -916,8 +1024,15 @@ class AssessmentUserMapping {
       throw new Error('Assessment already submitted');
     }
 
-    // Calculate scores
-    const scores = await this.calculateScores(id);
+    // Calculate scores from assigned questions (best submission per question).
+    await this.syncAssignmentWeightages(id);
+    const scoreResult = await AssessmentSegmentProgress.updateMappingTotalScore(id);
+    const scores = {
+      total_score: scoreResult.totalScore,
+      percentage_score: scoreResult.percentageScore,
+      max_possible_score: scoreResult.maxPossibleScore,
+      segment_scores: {}
+    };
 
     // Get threshold
     const [scoringConfig] = await pool.execute(
@@ -1167,6 +1282,11 @@ class AssessmentUserMapping {
       params.push(data.current_segment_index);
     }
 
+    if (data.current_question_index !== undefined) {
+      updates.push('current_question_index = ?');
+      params.push(data.current_question_index);
+    }
+
     
 
     if (data.time_remaining !== undefined) {
@@ -1190,12 +1310,24 @@ class AssessmentUserMapping {
       `UPDATE assessment_user_mappings SET ${updates.join(', ')} WHERE id = ?`,
       params
     );
-    console.log('data', data)
 
-    await pool.execute(
-      `UPDATE assessment_segment_progress SET time_used = ? ,current_question_index = ? ,time_remaining = ? WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
-      [data.time_spent, data.current_question_index, data.segment_time_remaining, id, data.segment_id]
-    );
+    // Segment-level progress is only updated when the caller supplies a segment_id
+    // (periodic auto-save from the take screen). nextSegment and similar flows update
+    // segment progress through dedicated helpers instead.
+    if (data.segment_id != null) {
+      await pool.execute(
+        `UPDATE assessment_segment_progress
+         SET time_used = ?, current_question_index = ?, time_remaining = ?
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [
+          data.time_spent ?? 0,
+          data.current_question_index ?? 0,
+          data.segment_time_remaining ?? 0,
+          id,
+          data.segment_id
+        ]
+      );
+    }
 
     return true;
   }

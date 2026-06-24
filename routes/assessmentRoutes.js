@@ -71,6 +71,9 @@ router.post('/user/assessments/:mapping_id/resume', authenticate, assessmentCont
 router.post('/user/assessments/:mapping_id/start', authenticate, assessmentController.startAssessment);
 router.post('/take/:mapping_id/start', authenticate, assessmentController.startAssessment);
 
+// Retake Assessment (user-initiated new attempt within max attempts)
+router.post('/user/assessments/:mapping_id/retake', authenticate, assessmentController.retakeAssessment);
+
 // Get Assessment Take Data (in progress assessment)
 router.get('/user/assessments/:mapping_id/take', authenticate, assessmentController.getAssessmentTake);
 

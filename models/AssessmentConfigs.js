@@ -1,4 +1,11 @@
 const pool = require('../config/db');
+const {
+  resolveProgrammingObtainedScore,
+  buildMcqScoreByOwner,
+  resolveMcqAssignmentScore,
+  resolveProgrammingAssignmentScore,
+  computeMappingTotalScore
+} = require('../utils/assessmentScoring');
 
 
 /**
@@ -659,13 +666,29 @@ class AssessmentSegmentProgress {
     return rows;
   }
 
-  static async startSegment(assessment_user_mapping_id, assessment_segment_id) {
-    await pool.execute(
-      `UPDATE assessment_segment_progress 
-       SET status = 'IN_PROGRESS', started_at = NOW()
-       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
-      [assessment_user_mapping_id, assessment_segment_id]
-    );
+  static async startSegment(assessment_user_mapping_id, assessment_segment_id, segmentDuration = null) {
+    const duration = segmentDuration != null ? Number(segmentDuration) : null;
+    if (duration != null && duration > 0) {
+      await pool.execute(
+        `UPDATE assessment_segment_progress 
+         SET status = 'IN_PROGRESS',
+             started_at = COALESCE(started_at, NOW()),
+             time_allocated = COALESCE(NULLIF(time_allocated, 0), ?),
+             time_remaining = CASE
+               WHEN COALESCE(time_remaining, 0) > 0 THEN time_remaining
+               ELSE ?
+             END
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [duration, duration, assessment_user_mapping_id, assessment_segment_id]
+      );
+    } else {
+      await pool.execute(
+        `UPDATE assessment_segment_progress 
+         SET status = 'IN_PROGRESS', started_at = COALESCE(started_at, NOW())
+         WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+        [assessment_user_mapping_id, assessment_segment_id]
+      );
+    }
     return true;
   }
 
@@ -771,9 +794,11 @@ class AssessmentSegmentProgress {
 
     if (mappingRows.length === 0) return false;
 
+    const safeSegmentIndex = parseInt(segment_index) || 0;
+    // Use OFFSET instead of LIMIT ?,1 — MySQL prepared statements reject bound LIMIT offsets
     const [segments] = await pool.execute(
-      'SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT ?, 1',
-      [mappingRows[0].assessment_id, segment_index]
+      `SELECT id FROM assessment_segments WHERE assessment_id = ? ORDER BY sequence_order ASC LIMIT 1 OFFSET ${safeSegmentIndex}`,
+      [mappingRows[0].assessment_id]
     );
 
     if (segments.length === 0) return false;
@@ -830,32 +855,35 @@ class AssessmentSegmentProgress {
   }
 
   /**
-   * Update segment score from the sum of all question submissions
+   * Update segment score from assigned questions (best submission per question).
    */
   static async updateSegmentScore(assessment_user_mapping_id, assessment_segment_id) {
-    // Calculate MCQ scores from mcq_submissions table
-    const [mcqResult] = await pool.execute(
-      `SELECT COALESCE(SUM(last_score), 0) as total_score
-       FROM mcq_submissions 
-       WHERE assessment_user_mapping_id = ? 
-         AND assessment_segment_id = ?`,
+    const [assignments] = await pool.execute(
+      `SELECT question_type, question_id, weightage
+       FROM user_question_assignments
+       WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
       [assessment_user_mapping_id, assessment_segment_id]
     );
 
-    // Calculate Programming scores from programming_submissions table
-    const [progResult] = await pool.execute(
-      `SELECT COALESCE(SUM(last_score), 0) as total_score
-       FROM programming_submissions 
-       WHERE assessment_user_mapping_id = ? 
-         AND assessment_segment_id = ?`,
-      [assessment_user_mapping_id, assessment_segment_id]
-    );
+    const mcqByOwner = await buildMcqScoreByOwner(assessment_user_mapping_id);
 
-    const mcqScore = parseFloat(mcqResult[0]?.total_score || 0);
-    const progScore = parseFloat(progResult[0]?.total_score || 0);
-    const totalScore = mcqScore + progScore;
+    let totalScore = 0;
+    for (const a of assignments) {
+      if (a.question_type === 'PROGRAMMING') {
+        totalScore += await resolveProgrammingAssignmentScore(
+          assessment_user_mapping_id,
+          a.question_id,
+          a.weightage
+        );
+      } else {
+        totalScore += await resolveMcqAssignmentScore(
+          assessment_user_mapping_id,
+          a.question_id,
+          mcqByOwner
+        );
+      }
+    }
 
-    // Update segment progress with calculated score
     await pool.execute(
       `UPDATE assessment_segment_progress 
        SET score = ? 
@@ -870,34 +898,16 @@ class AssessmentSegmentProgress {
    * Update total mapping score from all segment scores
    */
   static async updateMappingTotalScore(assessment_user_mapping_id) {
-    // Sum all segment scores for this mapping
-    const [result] = await pool.execute(
-      `SELECT COALESCE(SUM(score), 0) as total_score
-       FROM assessment_segment_progress 
-       WHERE assessment_user_mapping_id = ?`,
-      [assessment_user_mapping_id]
-    );
+    const score = await computeMappingTotalScore(assessment_user_mapping_id);
 
-    const totalScore = parseFloat(result[0]?.total_score || 0);
-
-    // Get max possible score from mapping
-    const [mappingResult] = await pool.execute(
-      `SELECT max_possible_score FROM assessment_user_mappings WHERE id = ?`,
-      [assessment_user_mapping_id]
-    );
-
-    const maxPossibleScore = parseFloat(mappingResult[0]?.max_possible_score || 0);
-    const percentageScore = maxPossibleScore > 0 ? (totalScore / maxPossibleScore * 100) : 0;
-
-    // Update mapping with total score
     await pool.execute(
-      `UPDATE assessment_user_mappings 
-       SET total_score = ?, percentage_score = ?
+      `UPDATE assessment_user_mappings
+       SET total_score = ?, percentage_score = ?, max_possible_score = ?
        WHERE id = ?`,
-      [totalScore, percentageScore.toFixed(2), assessment_user_mapping_id]
+      [score.totalScore, score.percentageScore.toFixed(2), score.maxPossibleScore, assessment_user_mapping_id]
     );
 
-    return { totalScore, percentageScore: parseFloat(percentageScore.toFixed(2)) };
+    return score;
   }
 
   /**
@@ -1123,13 +1133,17 @@ class UserQuestionAssignment {
       if (typeof selected === 'string') {
         try { selected = JSON.parse(selected); } catch (e) { /* keep raw */ }
       }
-      const key = row.mcq_id || row.mcq_question_id;
-      answers[key] = {
+      const mcqKey = row.mcq_id || row.mcq_question_id;
+      const payload = {
         question_type: 'MCQ',
         selected_options: selected,
         is_correct: row.is_correct,
         score: row.last_score
       };
+      answers[mcqKey] = payload;
+      if (row.mcq_id && row.mcq_question_id && row.mcq_id !== row.mcq_question_id) {
+        answers[row.mcq_question_id] = payload;
+      }
     }
 
     const progParams = [assessment_user_mapping_id];

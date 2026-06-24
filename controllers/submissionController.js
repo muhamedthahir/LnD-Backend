@@ -276,6 +276,50 @@ class SubmissionController {
   }
 
   /**
+   * Save programming code draft (no grading)
+   * POST /api/submissions/programming/save-code
+   */
+  static async saveProgrammingCode(req, res) {
+    try {
+      const {
+        programming_question_id,
+        practice_segment_id,
+        course_id,
+        submitted_code,
+        language_used
+      } = req.body;
+      const user_id = req.user.id;
+
+      if (!programming_question_id || !practice_segment_id || !course_id || !submitted_code) {
+        return res.status(400).json({
+          error: 'programming_question_id, practice_segment_id, course_id, and submitted_code are required'
+        });
+      }
+      if (!language_used) {
+        return res.status(400).json({ error: 'language_used is required' });
+      }
+
+      const result = await ProgrammingSubmission.saveCodeDraftForPractice({
+        user_id,
+        course_id,
+        practice_segment_id,
+        programming_question_id,
+        submitted_code,
+        language_used
+      });
+
+      res.json({
+        success: true,
+        message: 'Code saved',
+        submission_id: result.id
+      });
+    } catch (error) {
+      console.error('Save programming code error:', error);
+      res.status(500).json({ error: 'Failed to save code' });
+    }
+  }
+
+  /**
    * Submit programming answer
    * POST /api/submissions/programming/submit
    */

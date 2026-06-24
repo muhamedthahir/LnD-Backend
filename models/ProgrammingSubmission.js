@@ -52,6 +52,23 @@ class ProgrammingSubmission {
    * Create or update programming submission for assessment
    * @param {Object} data - submission data for assessment
    */
+  static normalizeSubmissionStatus(status, testCasesPassed = 0, testCasesTotal = 0) {
+    if (['pending', 'running', 'completed', 'error', 'attempted'].includes(status)) {
+      return status;
+    }
+    if (status === 'passed') return 'completed';
+    if (status === 'failed') {
+      return testCasesPassed > 0 ? 'attempted' : 'error';
+    }
+    if (testCasesTotal > 0 && testCasesPassed === testCasesTotal) return 'completed';
+    return testCasesPassed > 0 ? 'attempted' : 'error';
+  }
+
+  static normalizeHistoryStatus(status, testCasesPassed = 0, testCasesTotal = 0) {
+    const submissionStatus = this.normalizeSubmissionStatus(status, testCasesPassed, testCasesTotal);
+    return submissionStatus === 'attempted' ? 'error' : submissionStatus;
+  }
+
   static async createOrUpdateForAssessment(data) {
     const {
       user_id,
@@ -60,7 +77,7 @@ class ProgrammingSubmission {
       programming_question_id,
       submitted_code,
       language_used,
-      status = 'pending',
+      status: rawStatus = 'pending',
       test_cases_passed = 0,
       test_cases_total = 0,
       score = 0,
@@ -68,8 +85,22 @@ class ProgrammingSubmission {
       execution_time_ms = null,
       output = null,
       error_message = null,
-      execution_result = null
+      execution_result = null,
+      hidden_passed = 0,
+      hidden_total = 0
     } = data;
+
+    const status = this.normalizeSubmissionStatus(rawStatus, test_cases_passed, test_cases_total);
+    const historyStatus = this.normalizeHistoryStatus(rawStatus, test_cases_passed, test_cases_total);
+
+    const visiblePassed = Math.max(0, test_cases_passed - hidden_passed);
+    const visibleTotal = Math.max(0, test_cases_total - hidden_total);
+    const historyOutput = JSON.stringify({
+      hidden_passed,
+      hidden_total,
+      visible_passed: visiblePassed,
+      visible_total: visibleTotal
+    });
 
     // Ensure assessment columns exist
     await this.ensureAssessmentColumns();
@@ -122,9 +153,27 @@ class ProgrammingSubmission {
         ]
       );
 
+      const attemptNumber = (existing.submission_count || 0) + 1;
+      await this.createHistory({
+        programming_submission_id: existing.id,
+        attempt_number: attemptNumber,
+        submitted_code,
+        language_used,
+        status: historyStatus,
+        test_cases_passed,
+        test_cases_total,
+        score: score * 100,
+        output: historyOutput
+      });
+
+      await this.dedupeAssessmentSubmissions(
+        assessment_user_mapping_id,
+        programming_question_id,
+        existing.id
+      );
+
       return { id: existing.id, updated: true, score, test_cases_passed, test_cases_total };
     } else {
-      // Create new submission for assessment (no base submission needed)
       const [result] = await pool.execute(
         `INSERT INTO programming_submissions 
          (user_id, programming_question_id, assessment_user_mapping_id, assessment_segment_id,
@@ -142,6 +191,24 @@ class ProgrammingSubmission {
         ]
       );
 
+      await this.createHistory({
+        programming_submission_id: result.insertId,
+        attempt_number: 1,
+        submitted_code,
+        language_used,
+        status: historyStatus,
+        test_cases_passed,
+        test_cases_total,
+        score: score * 100,
+        output: historyOutput
+      });
+
+      await this.dedupeAssessmentSubmissions(
+        assessment_user_mapping_id,
+        programming_question_id,
+        result.insertId
+      );
+
       return { id: result.insertId, updated: false, score, test_cases_passed, test_cases_total };
     }
   }
@@ -151,10 +218,135 @@ class ProgrammingSubmission {
    */
   static async findByAssessmentAndQuestion(assessment_user_mapping_id, programming_question_id) {
     const [rows] = await pool.execute(
-      'SELECT * FROM programming_submissions WHERE assessment_user_mapping_id = ? AND programming_question_id = ?',
+      `SELECT * FROM programming_submissions
+       WHERE assessment_user_mapping_id = ? AND programming_question_id = ?
+       ORDER BY best_score DESC, id DESC`,
       [assessment_user_mapping_id, programming_question_id]
     );
     return rows[0] || null;
+  }
+
+  static async dedupeAssessmentSubmissions(assessment_user_mapping_id, programming_question_id, keepId) {
+    if (!keepId) return;
+    await pool.execute(
+      `DELETE FROM programming_submissions
+       WHERE assessment_user_mapping_id = ? AND programming_question_id = ? AND id != ?`,
+      [assessment_user_mapping_id, programming_question_id, keepId]
+    );
+  }
+
+  /**
+   * Save draft code without running tests or creating submission history.
+   */
+  static async saveCodeDraftForAssessment(data) {
+    const {
+      user_id,
+      assessment_user_mapping_id,
+      assessment_segment_id,
+      programming_question_id,
+      submitted_code,
+      language_used
+    } = data;
+
+    await this.ensureAssessmentColumns();
+
+    const existing = await this.findByAssessmentAndQuestion(
+      assessment_user_mapping_id,
+      programming_question_id
+    );
+
+    if (existing) {
+      await pool.execute(
+        `UPDATE programming_submissions SET
+           assessment_segment_id = ?,
+           last_submitted_code = ?,
+           language_used = ?,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [assessment_segment_id, submitted_code, language_used, existing.id]
+      );
+      await this.dedupeAssessmentSubmissions(
+        assessment_user_mapping_id,
+        programming_question_id,
+        existing.id
+      );
+      return { id: existing.id, updated: true };
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO programming_submissions
+         (user_id, programming_question_id, assessment_user_mapping_id, assessment_segment_id,
+          status, last_submitted_code, language_used, submission_count)
+       VALUES (?, ?, ?, ?, 'attempted', ?, ?, 0)`,
+      [
+        user_id,
+        programming_question_id,
+        assessment_user_mapping_id,
+        assessment_segment_id,
+        submitted_code,
+        language_used
+      ]
+    );
+    await this.dedupeAssessmentSubmissions(
+      assessment_user_mapping_id,
+      programming_question_id,
+      result.insertId
+    );
+    return { id: result.insertId, updated: false };
+  }
+
+  /**
+   * Save draft code for practice/course segments without grading.
+   */
+  static async saveCodeDraftForPractice(data) {
+    const {
+      user_id,
+      course_id,
+      practice_segment_id,
+      programming_question_id,
+      submitted_code,
+      language_used
+    } = data;
+
+    await this.ensureAssessmentColumns();
+
+    const existing = await this.findByUserAndQuestion(user_id, programming_question_id, {
+      practice_segment_id
+    });
+
+    if (existing) {
+      await pool.execute(
+        `UPDATE programming_submissions SET
+           last_submitted_code = ?,
+           language_used = ?,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [submitted_code, language_used, existing.id]
+      );
+      return { id: existing.id, updated: true };
+    }
+
+    const submissionId = await Submission.create({
+      user_id,
+      course_id,
+      submission_type: 'programming'
+    });
+
+    const [result] = await pool.execute(
+      `INSERT INTO programming_submissions
+         (submission_id, user_id, programming_question_id, practice_segment_id,
+          status, last_submitted_code, language_used, submission_count)
+       VALUES (?, ?, ?, ?, 'attempted', ?, ?, 0)`,
+      [
+        submissionId,
+        user_id,
+        programming_question_id,
+        practice_segment_id,
+        submitted_code,
+        language_used
+      ]
+    );
+    return { id: result.insertId, updated: false };
   }
 
   /**
@@ -402,7 +594,13 @@ class ProgrammingSubmission {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         programming_submission_id, attempt_number, submitted_code, language_used,
-        status, test_cases_passed, test_cases_total, score, execution_time_ms, output, error_message
+        status,
+        test_cases_passed ?? 0,
+        test_cases_total ?? 0,
+        score ?? 0,
+        execution_time_ms ?? null,
+        output ?? null,
+        error_message ?? null
       ]
     );
   }

@@ -352,14 +352,28 @@ class AssessmentSegment {
     await pool.execute(
       `UPDATE assessment_segments 
        SET total_marks = (
-         SELECT COALESCE(SUM(COALESCE(spq.weightage_override)), 0)
+         SELECT COALESCE(SUM(
+           CASE
+             WHEN spq.weightage_override IS NOT NULL AND spq.weightage_override != 0
+               THEN COALESCE(spq.positive_marks, q.points, 0)
+             ELSE COALESCE(spq.positive_marks, q.points, 0)
+           END
+         ), 0)
          FROM segment_programming_questions spq
          JOIN programming_questions pq ON spq.programming_question_id = pq.id
+         JOIN questions q ON pq.question_id = q.id
          WHERE spq.assessment_segment_id = ?
        ) + (
-         SELECT COALESCE(SUM(COALESCE(smq.weightage_override)), 0)
+         SELECT COALESCE(SUM(
+           CASE
+             WHEN smq.weightage_override IS NOT NULL AND smq.weightage_override != 0
+               THEN COALESCE(smq.positive_marks, q.points, 0)
+             ELSE COALESCE(smq.positive_marks, q.points, 0)
+           END
+         ), 0)
          FROM segment_mcq_questions smq
          JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
+         JOIN questions q ON mq.question_id = q.id
          WHERE smq.assessment_segment_id = ?
        )
        WHERE id = ?`,

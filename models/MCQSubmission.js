@@ -143,9 +143,16 @@ class MCQSubmission {
    * Find submission by assessment mapping and question
    */
   static async findByAssessmentAndQuestion(assessment_user_mapping_id, mcq_question_id) {
+    const resolvedId = await this.resolveQuestionId(mcq_question_id);
     const [rows] = await pool.execute(
-      'SELECT * FROM mcq_submissions WHERE assessment_user_mapping_id = ? AND mcq_question_id = ?',
-      [assessment_user_mapping_id, mcq_question_id]
+      `SELECT ms.*
+       FROM mcq_submissions ms
+       LEFT JOIN mcq_multiselect_questions mq
+         ON mq.question_id = ms.mcq_question_id OR mq.id = ms.mcq_question_id
+       WHERE ms.assessment_user_mapping_id = ?
+         AND (ms.mcq_question_id IN (?, ?) OR mq.id = ?)
+       ORDER BY ms.best_score DESC, ms.id DESC`,
+      [assessment_user_mapping_id, mcq_question_id, resolvedId, mcq_question_id]
     );
     return rows[0] || null;
   }

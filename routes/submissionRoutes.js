@@ -36,6 +36,9 @@ router.post('/practice/attempt', SubmissionController.attemptQuestion);
 // PROGRAMMING SUBMISSION ROUTES
 // =====================================================
 
+// Save programming code draft (no grading)
+router.post('/programming/save-code', SubmissionController.saveProgrammingCode);
+
 // Submit programming answer
 router.post('/programming/submit', SubmissionController.submitProgramming);
 

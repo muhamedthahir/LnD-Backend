@@ -198,7 +198,15 @@ class AssessmentAdministrator {
               [segment.id]
             );
             const fallbackType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
-            const questionType = segmentQ.question_type || fallbackType;
+            const AssessmentUserMapping = require('./AssessmentUserMapping');
+            const questionType = AssessmentUserMapping.resolveQuestionType(
+              segmentQ,
+              {
+                programming: programmingCount?.total || 0,
+                mcq: mcqCount?.total || 0
+              },
+              segment
+            ) || fallbackType;
             await connection.execute(
               `INSERT INTO random_fetch_criteria 
                (assessment_segment_id, question_type, question_bank_id, total_questions, easy_count, medium_count, hard_count, is_active)
@@ -284,6 +292,7 @@ class AssessmentAdministrator {
     // If random fetch is enabled, get segment-wise criteria
     if (admin.question_config && admin.question_config.fetch_random_question) {
       const AssessmentSegment = require('./AssessmentSegment');
+      const AssessmentUserMapping = require('./AssessmentUserMapping');
       const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
       const segmentQuestions = {};
       
@@ -300,13 +309,26 @@ class AssessmentAdministrator {
             acc.easy = (acc.easy || 0) + (c.easy_count || 0);
             acc.medium = (acc.medium || 0) + (c.medium_count || 0);
             acc.hard = (acc.hard || 0) + (c.hard_count || 0);
+            if (!acc.question_type && c.question_type) {
+              acc.question_type = c.question_type;
+            }
             if (!acc.question_bank_id && c.question_bank_id) {
               acc.question_bank_id = c.question_bank_id;
             }
             return acc;
-          }, { total: 0, easy: 0, medium: 0, hard: 0, question_bank_id: null });
+          }, { total: 0, easy: 0, medium: 0, hard: 0, question_bank_id: null, question_type: null });
           
-          segmentQuestions[segment.id] = aggregated;
+          segmentQuestions[segment.id] = {
+            ...aggregated,
+            question_type: AssessmentUserMapping.resolveQuestionType(
+              aggregated,
+              {
+                programming: segment.programming_question_count || 0,
+                mcq: segment.mcq_question_count || 0
+              },
+              segment
+            )
+          };
         }
       }
       
@@ -567,6 +589,23 @@ class AssessmentAdministrator {
                 );
                 
                 if (existingCriteria.length > 0) {
+                  const [[programmingCount]] = await connection.execute(
+                    'SELECT COUNT(*) as total FROM segment_programming_questions WHERE assessment_segment_id = ?',
+                    [segment.id]
+                  );
+                  const [[mcqCount]] = await connection.execute(
+                    'SELECT COUNT(*) as total FROM segment_mcq_questions WHERE assessment_segment_id = ?',
+                    [segment.id]
+                  );
+                  const AssessmentUserMapping = require('./AssessmentUserMapping');
+                  const questionType = AssessmentUserMapping.resolveQuestionType(
+                    segmentQ,
+                    {
+                      programming: programmingCount?.total || 0,
+                      mcq: mcqCount?.total || 0
+                    },
+                    segment
+                  );
                   // Update existing criteria for this segment
                   for (const criteriaRow of existingCriteria) {
                     await connection.execute(
@@ -579,7 +618,7 @@ class AssessmentAdministrator {
                          hard_count = ?
                        WHERE id = ?`,
                       [
-                        segmentQ.question_type || 'MCQ',
+                        questionType,
                         segmentQ.question_bank_id || null,
                         segmentQ.total || 0,
                         segmentQ.easy || 0,
@@ -599,7 +638,15 @@ class AssessmentAdministrator {
                     [segment.id]
                   );
                   const fallbackType = (programmingCount?.total || 0) > (mcqCount?.total || 0) ? 'PROGRAMMING' : 'MCQ';
-                  const questionType = segmentQ.question_type || fallbackType;
+                  const AssessmentUserMapping = require('./AssessmentUserMapping');
+                  const questionType = AssessmentUserMapping.resolveQuestionType(
+                    segmentQ,
+                    {
+                      programming: programmingCount?.total || 0,
+                      mcq: mcqCount?.total || 0
+                    },
+                    segment
+                  ) || fallbackType;
                   await connection.execute(
                     `INSERT INTO random_fetch_criteria 
                      (assessment_segment_id, question_type, question_bank_id, total_questions, easy_count, medium_count, hard_count, is_active)

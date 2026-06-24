@@ -19,6 +19,8 @@ const {
   UserQuestionAssignment,
   ProctoringLog
 } = require('../models/AssessmentConfigs');
+const { outputsMatch } = require('../utils/outputCompare');
+const { resolveSegmentQuestionWeight, resolveProgrammingObtainedScore, computeMappingTotalScore } = require('../utils/assessmentScoring');
 
 const formatLabel = (value) => {
   if (!value) return '';
@@ -26,6 +28,12 @@ const formatLabel = (value) => {
     .toString()
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (match) => match.toUpperCase());
+};
+
+/** Proctoring flags from MySQL may be 0/1; default to enabled when unset. */
+const isConfigFlagEnabled = (value, defaultEnabled = true) => {
+  if (value === undefined || value === null) return defaultEnabled;
+  return value === true || value === 1 || value === '1';
 };
 
 // Option text may be authored as rich text (e.g. "<div>WME</div>"). Strip tags so
@@ -772,6 +780,17 @@ const getUserMappings = async (req, res) => {
       pageSize: parseInt(pageSize)
     });
 
+    const mappings = result.mappings || result.data || [];
+    for (const mapping of mappings) {
+      if (['IN_PROGRESS', 'COMPLETED', 'SUBMITTED'].includes(mapping.status)) {
+        await AssessmentUserMapping.syncAssignmentWeightages(mapping.id);
+        const score = await AssessmentSegmentProgress.updateMappingTotalScore(mapping.id);
+        mapping.total_score = score.totalScore;
+        mapping.percentage_score = score.percentageScore;
+        mapping.max_possible_score = score.maxPossibleScore;
+      }
+    }
+
     res.json(result);
   } catch (error) {
     console.error('Error fetching user mappings:', error);
@@ -934,6 +953,16 @@ const downloadAssessmentReport = async (req, res) => {
     // falling back to the segment's fixed question list for legacy data.
     const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
     const mappingIds = mappingRows.map(row => row.id);
+
+    for (const row of mappingRows) {
+      if (['IN_PROGRESS', 'COMPLETED', 'SUBMITTED'].includes(row.status)) {
+        await AssessmentUserMapping.syncAssignmentWeightages(row.id);
+        const score = await computeMappingTotalScore(row.id);
+        row.percentage_score = score.percentageScore;
+        row.total_score = score.totalScore;
+        row.max_possible_score = score.maxPossibleScore;
+      }
+    }
 
     // Fallback question list per segment (used when a segment has no per-candidate
     // assignments recorded, e.g. legacy attempts or non-random/fixed segments).
@@ -1125,17 +1154,21 @@ const downloadAssessmentReport = async (req, res) => {
         if (typeof selected === 'string') {
           try { selected = JSON.parse(selected); } catch (e) { selected = []; }
         }
-        mcqSubmissionMap[key] = {
+        const next = {
           score: row.best_score,
           time_ms: row.time_taken_ms ?? 0,
           selected: Array.isArray(selected) ? selected : []
         };
+        const prev = mcqSubmissionMap[key];
+        if (!prev || (Number(next.score) || 0) >= (Number(prev.score) || 0)) {
+          mcqSubmissionMap[key] = next;
+        }
         addTimeTaken(row.assessment_user_mapping_id, row.assessment_segment_id, row.time_taken_ms);
       });
 
       const [progRows] = await pool.execute(
         `SELECT assessment_user_mapping_id, assessment_segment_id, programming_question_id,
-                best_score, best_test_cases_passed, test_cases_total, time_taken_ms,
+                best_score, max_score, best_test_cases_passed, test_cases_total, time_taken_ms,
                 last_submitted_code, best_submitted_code
          FROM programming_submissions
          WHERE assessment_user_mapping_id IN (${mappingIds.map(() => '?').join(',')})`,
@@ -1143,13 +1176,18 @@ const downloadAssessmentReport = async (req, res) => {
       );
       progRows.forEach(row => {
         const key = `${row.assessment_user_mapping_id}:${row.programming_question_id}`;
-        programmingSubmissionMap[key] = {
+        const next = {
           score: row.best_score,
+          max_score: row.max_score,
           passed: row.best_test_cases_passed ?? 0,
           total: row.test_cases_total ?? 0,
           time_ms: row.time_taken_ms ?? 0,
           code: row.best_submitted_code || row.last_submitted_code || ''
         };
+        const prev = programmingSubmissionMap[key];
+        if (!prev || (Number(next.score) || 0) >= (Number(prev.score) || 0)) {
+          programmingSubmissionMap[key] = next;
+        }
         addTimeTaken(row.assessment_user_mapping_id, row.assessment_segment_id, row.time_taken_ms);
       });
 
@@ -1262,7 +1300,8 @@ const downloadAssessmentReport = async (req, res) => {
           if (a.type === 'PROGRAMMING') {
             const submission = programmingSubmissionMap[`${row.id}:${a.qid}`];
             const progScore = submission && submission.score !== null && submission.score !== undefined
-              ? Number(submission.score) : null;
+              ? resolveProgrammingObtainedScore(submission.score, a.weight, submission.max_score)
+              : null;
             if (progScore !== null) rowObtained += progScore;
             // Time taken
             dataRow.push(submission ? formatDurationMs(submission.time_ms) : '');
@@ -1410,6 +1449,61 @@ const allowReattempt = async (req, res) => {
   } catch (error) {
     console.error('Error allowing reattempt:', error);
     res.status(500).json({ error: error.message || 'Failed to allow reattempt' });
+  }
+};
+
+/**
+ * User-initiated retake. Creates a fresh attempt for the logged-in user as long as a
+ * previous attempt is finished and the configured max attempts has not been reached.
+ */
+const retakeAssessment = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    // The mapping must belong to the requesting user.
+    if (mapping.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Only finished attempts can be retaken.
+    if (!['COMPLETED', 'SUBMITTED', 'DISQUALIFIED'].includes(mapping.status)) {
+      return res.status(400).json({ error: `Cannot retake an assessment with status: ${mapping.status}` });
+    }
+
+    // Enforce the configured attempt limit (attempts already used vs allowed).
+    const accessConfig = await AccessConfig.findByAdminId(mapping.assessment_administrator_id);
+    const maxAttempts = accessConfig?.max_attempts || 1;
+    const [usedRows] = await pool.execute(
+      `SELECT COUNT(*) AS used FROM assessment_user_mappings
+       WHERE user_id = ? AND assessment_administrator_id = ?`,
+      [mapping.user_id, mapping.assessment_administrator_id]
+    );
+    const attemptsUsed = usedRows[0]?.used || 0;
+    if (attemptsUsed >= maxAttempts) {
+      return res.status(400).json({ error: 'You have reached the maximum number of attempts for this assessment' });
+    }
+
+    // Don't allow a retake after the assessment window has closed.
+    const timingConfig = await TimingConfig.findByAdminId(mapping.assessment_administrator_id);
+    if (timingConfig?.end_date_time && new Date(timingConfig.end_date_time) < new Date()) {
+      return res.status(400).json({ error: 'This assessment has expired' });
+    }
+
+    const result = await AssessmentUserMapping.createReattempt(mapping_id);
+
+    res.json({
+      message: 'New attempt created',
+      mapping_id: result.id,
+      attempt_number: result.attempt_number
+    });
+  } catch (error) {
+    console.error('Error creating retake:', error);
+    res.status(500).json({ error: error.message || 'Failed to start retake' });
   }
 };
 
@@ -1631,6 +1725,7 @@ const startAssessment = async (req, res) => {
 
     res.json({
       message: 'Assessment started successfully',
+      attempt_id: result.id,
       mapping: result
     });
   } catch (error) {
@@ -1661,6 +1756,8 @@ const getAssessmentTake = async (req, res) => {
     if (!['IN_PROGRESS', 'INVITED', 'NOT_STARTED', 'PAUSED'].includes(mapping.status)) {
       return res.status(400).json({ error: `Assessment cannot be taken. Current status: ${mapping.status}` });
     }
+
+    await AssessmentUserMapping.syncAssignmentWeightages(mapping_id);
 
     // If not in progress, start it first
     if (mapping.status !== 'IN_PROGRESS') {
@@ -2014,6 +2111,13 @@ const getAssessmentTake = async (req, res) => {
       await AssessmentUserMapping.resume(mapping_id);
     }
 
+    // Prefer segment progress for the active question index (mapping column can be stale)
+    const segmentProgressRow = await AssessmentSegmentProgress.findByMappingAndSegment(
+      mapping_id,
+      currentSegment.id
+    );
+    const resolvedQuestionIndex = segmentProgressRow?.current_question_index ?? mapping.current_question_index ?? 0;
+
     res.json({
       questions: questions.map(q => ({
         ...q,
@@ -2030,9 +2134,9 @@ const getAssessmentTake = async (req, res) => {
         time_remaining: actualSegmentTimeRemaining
       },
       current_segment_index: currentSegmentIndex,
-      current_question_index: mapping.current_question_index || 0,
+      current_question_index: resolvedQuestionIndex,
       saved_answers: answersMap,
-      allow_segment_switch: admin.proctoring_config?.allow_segment_switch ?? true,
+      allow_segment_switch: isConfigFlagEnabled(admin.proctoring_config?.allow_segment_switch, true),
       proctoring: {
         proctoring_enabled: admin.proctoring_config?.proctoring_enabled || false,
         full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
@@ -2201,6 +2305,9 @@ const getAssessmentResult = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    await AssessmentUserMapping.syncAssignmentWeightages(mapping_id);
+    await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
+
     // Get scoring config to check if results should be shown
     const scoringConfig = await ScoringConfig.findByAdminId(mapping.assessment_administrator_id);
     if (!scoringConfig?.show_score_at_end && !isAdmin) {
@@ -2279,6 +2386,12 @@ const getAssessmentResult = async (req, res) => {
       const enhancedQuestions = await Promise.all(questions.map(async (q) => {
         if (q.question_type === 'PROGRAMMING') {
           const submission = await ProgrammingSubmission.findByAssessmentAndQuestion(mapping_id, q.question_id);
+          const rawScore = submission?.best_score || 0;
+          const resolvedScore = resolveProgrammingObtainedScore(
+            rawScore,
+            q.weightage,
+            submission?.max_score
+          );
           return {
             ...q,
             is_attempted: !!submission,
@@ -2287,7 +2400,7 @@ const getAssessmentResult = async (req, res) => {
             test_cases_passed: submission?.best_test_cases_passed,
             test_cases_total: submission?.test_cases_total,
             user_answer: null,
-            score: submission?.best_score || 0
+            score: resolvedScore
           };
         }
 
@@ -2474,14 +2587,22 @@ const saveAnswer = async (req, res) => {
       const negativeMarks = questionInfo[0]?.negative_marks || 0;
       timeToSolve = questionInfo[0]?.time_to_solve ?? null;
 
-      // Calculate score (normalized to 1)
+      const [assignRows] = await pool.execute(
+        `SELECT weightage FROM user_question_assignments
+         WHERE assessment_user_mapping_id = ? AND question_type = 'MCQ' AND question_id = ?
+         LIMIT 1`,
+        [mapping_id, question_id]
+      );
+      const questionWeight = parseFloat(assignRows[0]?.weightage) || marks;
+
+      // Calculate score using configured question weight
       if (isCorrect) {
-        score = 1; // Correct answer gives 1 point
+        score = questionWeight;
       } else if (selectedIds.length > 0) {
-        // Wrong answer - apply negative marking if enabled
-        score = - (negativeMarks / marks); // Normalize negative marks too
+        score = negativeMarks > 0
+          ? -(negativeMarks / marks) * questionWeight
+          : 0;
       } else {
-        // Unanswered
         score = 0;
       }
     }
@@ -2517,17 +2638,17 @@ const saveAnswer = async (req, res) => {
          LIMIT 1`,
         [question_id]
       );
-      const resolvedQuestionId = mcqRows[0]?.question_id || question_id;
+      const mcqId = mcqRows[0]?.id || question_id;
       await MCQSubmission.createOrUpdateForAssessment({
         user_id: req.user.id,
         assessment_user_mapping_id: mapping_id,
         assessment_segment_id: segment_id,
-        mcq_question_id: resolvedQuestionId,
+        mcq_question_id: mcqId,
         selected_options: Array.isArray(answer) ? answer : (answer?.selected_options || [answer]),
         correct_options: correctOptions,
         is_correct: isCorrect,
-        score: score || 0, // Score is 0 to 1
-        max_score: 1
+        score: score || 0,
+        max_score: questionWeight
       });
 
       // Accumulate millisecond-precision time spent on this question (sent as a
@@ -2536,15 +2657,37 @@ const saveAnswer = async (req, res) => {
       if (Number.isFinite(deltaMs) && deltaMs > 0) {
         try {
           await pool.execute(
-            `UPDATE mcq_submissions
-             SET time_taken_ms = COALESCE(time_taken_ms, 0) + ?
-             WHERE assessment_user_mapping_id = ? AND mcq_question_id = ?`,
-            [Math.round(deltaMs), mapping_id, resolvedQuestionId]
+            `UPDATE mcq_submissions ms
+             LEFT JOIN mcq_multiselect_questions mq
+               ON mq.question_id = ms.mcq_question_id OR mq.id = ms.mcq_question_id
+             SET ms.time_taken_ms = COALESCE(ms.time_taken_ms, 0) + ?
+             WHERE ms.assessment_user_mapping_id = ?
+               AND (ms.mcq_question_id = ? OR mq.id = ?)`,
+            [Math.round(deltaMs), mapping_id, mcqRows[0]?.question_id || question_id, mcqId]
           );
         } catch (e) {
           // Legacy DB without time_taken_ms column; ignore so answer saving still works.
         }
       }
+    } else if (question_type === 'PROGRAMMING') {
+      const submittedCode = typeof answer === 'string' ? answer : answer?.code;
+      const languageUsed = req.body.language || answer?.language;
+
+      if (!submittedCode || !submittedCode.trim()) {
+        return res.status(400).json({ error: 'Code is required' });
+      }
+      if (!languageUsed) {
+        return res.status(400).json({ error: 'Language is required' });
+      }
+
+      await ProgrammingSubmission.saveCodeDraftForAssessment({
+        user_id: req.user.id,
+        assessment_user_mapping_id: mapping_id,
+        assessment_segment_id: segment_id,
+        programming_question_id: question_id,
+        submitted_code: submittedCode,
+        language_used: languageUsed
+      });
     }
 
     // Update segment score from all submissions
@@ -2801,6 +2944,35 @@ const submitCode = async (req, res) => {
       'c++': '10.2.0'
     };
 
+    const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(mapping_id, mapping.current_segment_index);
+
+    let questionWeight = 1;
+    const [assignRows] = await pool.execute(
+      `SELECT weightage FROM user_question_assignments
+       WHERE assessment_user_mapping_id = ? AND question_type = 'PROGRAMMING' AND question_id = ?
+       LIMIT 1`,
+      [mapping_id, question_id]
+    );
+    if (assignRows[0]?.weightage) {
+      questionWeight = parseFloat(assignRows[0].weightage) || 1;
+    } else if (segment_id) {
+      const [spqRows] = await pool.execute(
+        `SELECT spq.positive_marks, spq.weightage_override, q.points as default_weightage
+         FROM segment_programming_questions spq
+         JOIN programming_questions pq ON spq.programming_question_id = pq.id
+         JOIN questions q ON pq.question_id = q.id
+         WHERE spq.assessment_segment_id = ? AND pq.id = ?`,
+        [segment_id, question_id]
+      );
+      if (spqRows[0]) {
+        questionWeight = resolveSegmentQuestionWeight(spqRows[0]);
+      }
+    }
+
+    const hiddenCases = allTestCases.filter(tc => tc.is_hidden);
+    const scoringCases = hiddenCases.length > 0 ? hiddenCases : allTestCases;
+    const perCaseWeight = scoringCases.length > 0 ? (questionWeight / scoringCases.length) : 0;
+
     let testCasesPassed = 0;
     let totalTestCases = allTestCases.length;
     let totalPoints = 0;
@@ -2808,7 +2980,11 @@ const submitCode = async (req, res) => {
     const testResults = [];
 
     for (const testCase of allTestCases) {
-      totalPoints += testCase.weight || 1;
+      const countsTowardScore = hiddenCases.length > 0 ? testCase.is_hidden : true;
+      const caseWeight = countsTowardScore ? perCaseWeight : 0;
+      if (countsTowardScore) {
+        totalPoints += caseWeight;
+      }
       
       try {
         const pistonPayload = {
@@ -2829,13 +3005,15 @@ const submitCode = async (req, res) => {
 
         if (response.ok) {
           const result = await response.json();
-          const actualOutput = (result.run?.stdout || '').trim();
-          const expectedOutput = (testCase.expected_result || '').trim();
-          const passed = actualOutput === expectedOutput;
+          const actualOutput = result.run?.stdout || '';
+          const expectedOutput = testCase.expected_result || '';
+          const passed = outputsMatch(actualOutput, expectedOutput);
 
           if (passed) {
             testCasesPassed++;
-            earnedPoints += testCase.weight || 1;
+            if (countsTowardScore) {
+              earnedPoints += caseWeight;
+            }
           }
 
           testResults.push({
@@ -2868,11 +3046,18 @@ const submitCode = async (req, res) => {
       }
     }
 
-    const percentageScore = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
-    const normalizedScore = totalPoints > 0 ? (earnedPoints / totalPoints) : 0; // Score between 0 and 1
+    const normalizedRatio = totalPoints > 0 ? (earnedPoints / totalPoints) : 0;
+    const percentageScore = Math.round(normalizedRatio * 100);
 
-    // Get segment_id from segment_index
-    const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(mapping_id, mapping.current_segment_index);
+    const absoluteScore = normalizedRatio * questionWeight;
+
+    const hiddenPassed = testResults.filter(r => r.is_hidden && r.passed).length;
+    const hiddenTotal = testResults.filter(r => r.is_hidden).length;
+
+    const allPassed = totalTestCases > 0 && testCasesPassed === totalTestCases;
+    const submissionStatus = allPassed
+      ? 'completed'
+      : (testCasesPassed > 0 ? 'attempted' : 'error');
 
     // Save the code submission in programming_submissions table
     const result = await ProgrammingSubmission.createOrUpdateForAssessment({
@@ -2882,12 +3067,14 @@ const submitCode = async (req, res) => {
       programming_question_id: question_id,
       submitted_code: code,
       language_used: language,
-      status: testCasesPassed === totalTestCases ? 'passed' : 'failed',
+      status: submissionStatus,
       test_cases_passed: testCasesPassed,
       test_cases_total: totalTestCases,
-      score: normalizedScore,  // Store normalized score 0 to 1
-      max_score: 1,
-      execution_result: testResults
+      score: absoluteScore,
+      max_score: questionWeight,
+      execution_result: testResults,
+      hidden_passed: hiddenPassed,
+      hidden_total: hiddenTotal
     });
 
     // Accumulate millisecond-precision time spent on this question (client sends a delta).
@@ -2966,10 +3153,27 @@ const nextSegment = async (req, res) => {
 
     // Get admin and segments
     const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
-    const segments = await AssessmentSegment.findByAssessmentId(admin.assessment_id);
-    
-    const nextIndex = mapping.current_segment_index + 1;
-    if (nextIndex >= segments.length) {
+    const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
+
+    const currentIndex = Number(mapping.current_segment_index) || 0;
+
+    // Mark the segment being submitted as completed
+    if (currentIndex < segments.length) {
+      await AssessmentSegmentProgress.markSegmentCompleted(mapping_id, currentIndex);
+    }
+
+    // Advance to the next segment that is not yet completed (first unanswered segment)
+    let nextIndex = -1;
+    for (let i = currentIndex + 1; i < segments.length; i++) {
+      const seg = segments[i];
+      const progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, seg.id);
+      if (!progress || progress.status !== 'COMPLETED') {
+        nextIndex = i;
+        break;
+      }
+    }
+
+    if (nextIndex === -1) {
       return res.status(400).json({ error: 'No more segments' });
     }
 
@@ -2977,18 +3181,53 @@ const nextSegment = async (req, res) => {
     await AssessmentUserMapping.updateSegmentIndex(mapping_id, nextIndex);
 
     // Get questions for next segment
-    const nextSegment = segments[nextIndex];
-    const questions = await getSegmentQuestions(nextSegment.id, mapping_id);
+    const nextSegmentData = segments[nextIndex];
+    const questions = await getSegmentQuestions(nextSegmentData.id, mapping_id);
 
-    // Mark current segment as completed in progress
-    await AssessmentSegmentProgress.markSegmentCompleted(mapping_id, mapping.current_segment_index);
+    // Start the next segment if the candidate has not opened it yet
+    let progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, nextSegmentData.id);
+    const wasNotStarted = !progress || progress.status === 'NOT_STARTED';
+
+    if (wasNotStarted) {
+      await AssessmentSegmentProgress.startSegment(
+        mapping_id,
+        nextSegmentData.id,
+        nextSegmentData.segment_duration
+      );
+      progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, nextSegmentData.id);
+    }
+
+    // Fresh segments default time_remaining to 0 in DB — use full segment duration unless
+    // the candidate is resuming with saved time or elapsed time can be calculated.
+    let segmentTimeRemaining;
+    if (wasNotStarted) {
+      segmentTimeRemaining = nextSegmentData.segment_duration || 0;
+    } else if ((progress?.time_remaining ?? 0) > 0) {
+      segmentTimeRemaining = progress.time_remaining;
+    } else if (progress?.started_at) {
+      const segmentElapsed = Math.floor(
+        (Date.now() - new Date(progress.started_at).getTime()) / 1000
+      );
+      segmentTimeRemaining = Math.max(0, (nextSegmentData.segment_duration || 0) - segmentElapsed);
+    } else {
+      segmentTimeRemaining = nextSegmentData.segment_duration || 0;
+    }
+
+    await AssessmentUserMapping.saveProgress(mapping_id, {
+      current_segment_index: nextIndex,
+      current_question_index: 0,
+      segment_time_remaining: segmentTimeRemaining,
+    });
+
+    const savedAnswers = await UserQuestionAssignment.getSavedAnswers(mapping_id, nextSegmentData.id);
 
     res.json({
       segment_index: nextIndex,
-      segment: nextSegment,
+      segment: nextSegmentData,
       questions,
-      segment_duration: nextSegment.segment_duration,
-      saved_answers: {}
+      segment_duration: nextSegmentData.segment_duration,
+      segment_time_remaining: segmentTimeRemaining,
+      saved_answers: savedAnswers
     });
   } catch (error) {
     console.error('Error moving to next segment:', error);
@@ -3028,7 +3267,7 @@ const switchSegment = async (req, res) => {
     // Enforce inter-segment navigation policy. When disabled, candidates cannot jump
     // between segments (segments lock once completed; forward progress uses "next segment").
     const proctoringConfig = await ProctoringConfig.findByAdminId(mapping.assessment_administrator_id);
-    const allowSegmentSwitch = proctoringConfig?.allow_segment_switch !== false; // default true
+    const allowSegmentSwitch = isConfigFlagEnabled(proctoringConfig?.allow_segment_switch, true);
     if (!allowSegmentSwitch && Number(segment_index) !== Number(mapping.current_segment_index)) {
       return res.status(403).json({ error: 'Segment navigation is disabled for this assessment' });
     }
@@ -3041,14 +3280,36 @@ const switchSegment = async (req, res) => {
     const questions = await getSegmentQuestions(targetSegment.id, mapping_id);
 
     // If segment was already started/completed, restore saved answers and time remaining
-    const progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, targetSegment.id);
-    const hasTakenSegment = progress && progress.status !== 'NOT_STARTED';
-    const savedAnswers = hasTakenSegment
-      ? await UserQuestionAssignment.getSavedAnswers(mapping_id, targetSegment.id)
-      : {};
-    const segmentTimeRemaining = hasTakenSegment
-      ? (progress.time_remaining ?? 0)
-      : targetSegment.segment_duration;
+    let progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, targetSegment.id);
+    const wasNotStarted = !progress || progress.status === 'NOT_STARTED';
+
+    if (wasNotStarted) {
+      await AssessmentSegmentProgress.startSegment(
+        mapping_id,
+        targetSegment.id,
+        targetSegment.segment_duration
+      );
+      progress = await AssessmentSegmentProgress.findByMappingAndSegment(mapping_id, targetSegment.id);
+    }
+
+    const savedAnswers = await UserQuestionAssignment.getSavedAnswers(mapping_id, targetSegment.id);
+
+    let segmentTimeRemaining;
+    if (wasNotStarted) {
+      segmentTimeRemaining = targetSegment.segment_duration || 0;
+    } else if ((progress?.time_remaining ?? 0) > 0) {
+      segmentTimeRemaining = progress.time_remaining;
+    } else if (progress?.started_at) {
+      const segmentElapsed = Math.floor(
+        (Date.now() - new Date(progress.started_at).getTime()) / 1000
+      );
+      segmentTimeRemaining = Math.max(0, (targetSegment.segment_duration || 0) - segmentElapsed);
+    } else {
+      segmentTimeRemaining = targetSegment.segment_duration || 0;
+    }
+
+    await AssessmentUserMapping.syncAssignmentWeightages(mapping_id);
+    await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
 
     res.json({
       segment_index,
@@ -3318,6 +3579,7 @@ module.exports = {
   getUserMappings,
   downloadAssessmentReport,
   allowReattempt,
+  retakeAssessment,
   refreshViolation,
   deleteUserMapping,
   sendInvitation,
