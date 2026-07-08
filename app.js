@@ -1,4 +1,5 @@
 // app.js
+
 const express = require('express');
 const http = require('http');
 require('./config/db.js'); // Initialize database connection
@@ -233,4 +234,3 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`WebSocket: ws://localhost:${PORT}/ws/code-execute`);
 });
-
