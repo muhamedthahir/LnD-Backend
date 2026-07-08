@@ -229,6 +229,7 @@ app.get('/ws/status', (req, res) => {
   res.json(WebSocketServer.getStatus());
 });
 
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
