@@ -44,5 +44,8 @@ router.post('/presigned-url', uploadController.getPresignedUploadUrl);
 // POST /api/upload/presigned-urls
 router.post('/presigned-urls', uploadController.getPresignedUploadUrls);
 
+// POST /api/upload/presigned-download
+router.post('/presigned-download', uploadController.getPresignedDownloadUrl);
+
 module.exports = router;
 

@@ -3,14 +3,53 @@
 const { S3Client, CreateBucketCommand, PutObjectCommand, HeadBucketCommand, DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-// Initialize S3 Client from environment variables
+const getAwsCredentials = () => ({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+});
+
+const getAwsRegion = () => process.env.AWS_REGION || 'us-east-1';
+
+// Initialize S3 Client from environment variables (server-side uploads)
 const getS3Client = () => {
   return new S3Client({
-    region: process.env.AWS_REGION || 'us-east-1',
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    }
+    region: getAwsRegion(),
+    credentials: getAwsCredentials()
+  });
+};
+
+/**
+ * S3 client for browser presigned PUT uploads.
+ * AWS SDK v3.729+ defaults to checksum headers in PutObject signatures; browsers
+ * cannot reproduce those headers, which causes 403 SignatureDoesNotMatch.
+ */
+const getPresignedUploadS3Client = () => {
+  return new S3Client({
+    region: getAwsRegion(),
+    credentials: getAwsCredentials(),
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED'
+  });
+};
+
+const redactPresignedUrl = (url) => {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}?[signed-query]`;
+  } catch {
+    return '[invalid-presigned-url]';
+  }
+};
+
+const logPresignedUploadContext = (phase, details) => {
+  console.info('[S3 presigned upload]', phase, {
+    bucket: details.bucket,
+    region: details.region,
+    key: details.key,
+    contentType: details.contentType,
+    presignedUrl: details.presignedUrl ? redactPresignedUrl(details.presignedUrl) : undefined,
+    expiresIn: details.expiresIn,
+    ...details.extra
   });
 };
 
@@ -264,9 +303,37 @@ const getFile = async (key) => {
  * Generate a presigned URL for a file in S3
  * @param {string} key - S3 object key
  * @param {number} expiresIn - Expiration time in seconds (default: 3 hours = 10800 seconds)
+ * @param {string|null} responseContentType - Optional Content-Type override for playback
  * @returns {Promise<string>} - Presigned URL
  */
-const getPresignedUrl = async (key, expiresIn = 10800) => {
+const EXTENSION_TO_MIME = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  webm: 'video/webm',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  pdf: 'application/pdf',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp'
+};
+
+const inferContentTypeFromKey = (key) => {
+  const fileName = String(key || '').split('/').pop() || '';
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  return extension ? EXTENSION_TO_MIME[extension] || null : null;
+};
+
+const getPresignedUrl = async (key, expiresIn = 10800, responseContentType = null) => {
   const s3Client = getS3Client();
   const bucket = process.env.S3_BUCKET_NAME;
 
@@ -275,10 +342,17 @@ const getPresignedUrl = async (key, expiresIn = 10800) => {
   }
 
   try {
-    const command = new GetObjectCommand({
+    const commandInput = {
       Bucket: bucket,
       Key: key
-    });
+    };
+
+    const resolvedContentType = responseContentType || inferContentTypeFromKey(key);
+    if (resolvedContentType) {
+      commandInput.ResponseContentType = resolvedContentType;
+    }
+
+    const command = new GetObjectCommand(commandInput);
 
     const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn });
     return presignedUrl;
@@ -471,13 +545,18 @@ const generateLessonFolderPath = (courseId, courseName, sectionId, sectionName, 
  */
 const generatePresignedUploadUrl = async (key, contentType, expiresIn = 3600) => {
   const bucket = process.env.S3_BUCKET_NAME;
-  
+  const region = getAwsRegion();
+
   // Check if S3 is configured
   if (!bucket || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
     throw new Error('S3 is not configured. Please set S3_BUCKET_NAME, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY environment variables.');
   }
 
-  const s3Client = getS3Client();
+  if (!contentType) {
+    throw new Error('contentType is required for presigned upload URLs');
+  }
+
+  const s3Client = getPresignedUploadS3Client();
 
   try {
     const command = new PutObjectCommand({
@@ -487,18 +566,37 @@ const generatePresignedUploadUrl = async (key, contentType, expiresIn = 3600) =>
     });
 
     const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn });
-    
+
     // Generate the final S3 URL (what the file URL will be after upload)
-    const fileUrl = `https://${bucket}.s3.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/${key}`;
+    const fileUrl = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+
+    logPresignedUploadContext('generated', {
+      bucket,
+      region,
+      key,
+      contentType,
+      presignedUrl,
+      expiresIn
+    });
 
     return {
       presignedUrl,
       key,
       fileUrl,
+      contentType,
+      bucket,
+      region,
       expiresIn
     };
   } catch (error) {
-    console.error('Error generating presigned upload URL:', error);
+    console.error('[S3 presigned upload] generation failed', {
+      bucket,
+      region,
+      key,
+      contentType,
+      message: error.message,
+      name: error.name
+    });
     throw error;
   }
 };
@@ -537,6 +635,8 @@ module.exports = {
   generateSectionFolderPath,
   generateLessonFolderPath,
   generatePresignedUploadUrl,
-  generatePresignedUploadUrls
+  generatePresignedUploadUrls,
+  redactPresignedUrl,
+  logPresignedUploadContext
 };
 

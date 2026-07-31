@@ -92,6 +92,40 @@ If you prefer minimal permissions, create a custom policy:
 
 Replace `YOUR_BUCKET_NAME` with your actual bucket name.
 
+### Presigned browser uploads (PUT)
+
+Direct browser uploads use presigned `PutObject` URLs. The IAM user in `AWS_ACCESS_KEY_ID` must allow:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME"
+    }
+  ]
+}
+```
+
+If `PutObject` is missing, S3 returns **403 AccessDenied** with XML like:
+
+`User ... is not authorized to perform: s3:PutObject on resource: "arn:aws:s3:::YOUR_BUCKET_NAME/..."`
+
+The backend now logs bucket, region, key, contentType, and a redacted presigned URL when generating upload URLs.
+
+**AWS SDK v3 note:** `@aws-sdk/client-s3` v3.729+ may add checksum query params to presigned PUT URLs. Browser uploads cannot satisfy those checksum headers, which can also cause 403 signature errors. The backend presign client sets `requestChecksumCalculation: 'WHEN_REQUIRED'` to avoid that for browser uploads.
+
 ## Step 3: Configure Environment Variables
 
 Add the following environment variables to your `.env` file in the `LnD-Backend` directory:

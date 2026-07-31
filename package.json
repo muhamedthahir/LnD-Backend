@@ -15,7 +15,9 @@
     "reset-password": "node scripts/resetUserPassword.js",
     "create-and-migrate": "node scripts/createAndMigrateTables.js",
     "create-missing-tables": "node scripts/createMissingTables.js",
-    "reset-db": "node scripts/resetDatabaseWithUsers.js"
+    "reset-db": "node scripts/resetDatabaseWithUsers.js",
+    "migrate-local-to-prod": "node scripts/migrateLocalToCommentedProd.js",
+    "grant-s3-upload-access": "node scripts/grantSkillvantixUploadAccess.js"
   },
   "repository": {
     "type": "git",

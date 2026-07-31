@@ -33,6 +33,42 @@ const ALLOWED_MIME_TYPES = {
   'image/webp': 'webp'
 };
 
+const EXTENSION_TO_MIME = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  webm: 'video/webm',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  pdf: 'application/pdf',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp'
+};
+
+const resolveUploadContentType = (fileName, contentType) => {
+  const normalized = String(contentType || '').trim();
+  if (normalized && normalized !== 'application/octet-stream' && ALLOWED_MIME_TYPES[normalized]) {
+    return normalized;
+  }
+
+  const extension = String(fileName || '').split('.').pop()?.toLowerCase();
+  const inferred = extension ? EXTENSION_TO_MIME[extension] : null;
+  if (inferred && ALLOWED_MIME_TYPES[inferred]) {
+    return inferred;
+  }
+
+  return null;
+};
+
 // Maximum file sizes (in bytes)
 const MAX_FILE_SIZES = {
   audio: 100 * 1024 * 1024,    // 100MB for audio
@@ -274,14 +310,14 @@ const getPresignedUploadUrl = async (req, res) => {
   try {
     const { fileName, contentType, courseId, courseName, sectionId, sectionName, lessonName } = req.body;
 
-    if (!fileName || !contentType) {
-      return res.status(400).json({ error: 'fileName and contentType are required' });
+    if (!fileName) {
+      return res.status(400).json({ error: 'fileName is required' });
     }
 
-    // Validate content type
-    if (!ALLOWED_MIME_TYPES[contentType]) {
-      return res.status(400).json({ 
-        error: `Content type '${contentType}' is not allowed`,
+    const resolvedContentType = resolveUploadContentType(fileName, contentType);
+    if (!resolvedContentType) {
+      return res.status(400).json({
+        error: `Content type '${contentType || ''}' is not allowed for file '${fileName}'`,
         allowedTypes: Object.keys(ALLOWED_MIME_TYPES)
       });
     }
@@ -301,8 +337,17 @@ const getPresignedUploadUrl = async (req, res) => {
     const uniqueFileName = `${timestamp}_${sanitizedFileName}`;
     const key = `${folderPath}${uniqueFileName}`;
 
+    console.info('[upload/presigned-url] request', {
+      fileName,
+      requestedContentType: contentType || null,
+      resolvedContentType,
+      key,
+      bucket: process.env.S3_BUCKET_NAME,
+      region: process.env.AWS_REGION || 'us-east-1'
+    });
+
     // Generate presigned URL
-    const result = await s3Service.generatePresignedUploadUrl(key, contentType, 3600); // 1 hour expiry
+    const result = await s3Service.generatePresignedUploadUrl(key, resolvedContentType, 3600); // 1 hour expiry
 
     res.json({
       success: true,
@@ -312,6 +357,9 @@ const getPresignedUploadUrl = async (req, res) => {
         fileUrl: result.fileUrl,
         fileName: uniqueFileName,
         originalFileName: fileName,
+        contentType: result.contentType,
+        bucket: result.bucket,
+        region: result.region,
         expiresIn: result.expiresIn
       }
     });
@@ -347,16 +395,23 @@ const getPresignedUploadUrls = async (req, res) => {
       return res.status(400).json({ error: 'files array is required' });
     }
 
-    // Validate all content types
+    const resolvedFiles = [];
     for (const file of files) {
-      if (!file.fileName || !file.contentType) {
-        return res.status(400).json({ error: 'Each file must have fileName and contentType' });
+      if (!file.fileName) {
+        return res.status(400).json({ error: 'Each file must have fileName' });
       }
-      if (!ALLOWED_MIME_TYPES[file.contentType]) {
-        return res.status(400).json({ 
-          error: `Content type '${file.contentType}' for file '${file.fileName}' is not allowed`
+
+      const resolvedContentType = resolveUploadContentType(file.fileName, file.contentType);
+      if (!resolvedContentType) {
+        return res.status(400).json({
+          error: `Content type '${file.contentType || ''}' for file '${file.fileName}' is not allowed`
         });
       }
+
+      resolvedFiles.push({
+        ...file,
+        resolvedContentType
+      });
     }
 
     // Generate folder path
@@ -370,15 +425,26 @@ const getPresignedUploadUrls = async (req, res) => {
 
     // Prepare files with unique names and folder paths
     const timestamp = Date.now();
-    const filesWithPaths = files.map((file, index) => {
+    const filesWithPaths = resolvedFiles.map((file, index) => {
       const sanitizedFileName = file.fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
       const uniqueFileName = `${timestamp}_${index}_${sanitizedFileName}`;
       return {
         fileName: uniqueFileName,
         originalFileName: file.fileName,
-        contentType: file.contentType,
+        contentType: file.resolvedContentType,
         folderPath
       };
+    });
+
+    console.info('[upload/presigned-urls] request', {
+      fileCount: filesWithPaths.length,
+      bucket: process.env.S3_BUCKET_NAME,
+      region: process.env.AWS_REGION || 'us-east-1',
+      files: filesWithPaths.map((file) => ({
+        originalFileName: file.originalFileName,
+        contentType: file.contentType,
+        key: `${file.folderPath}${file.fileName}`
+      }))
     });
 
     // Generate presigned URLs
@@ -392,6 +458,9 @@ const getPresignedUploadUrls = async (req, res) => {
         fileUrl: result.fileUrl,
         fileName: filesWithPaths[index].fileName,
         originalFileName: files[index].fileName,
+        contentType: result.contentType,
+        bucket: result.bucket,
+        region: result.region,
         expiresIn: result.expiresIn
       }))
     });
@@ -405,6 +474,38 @@ const getPresignedUploadUrls = async (req, res) => {
   }
 };
 
+/**
+ * Get a presigned URL for downloading/streaming a file from S3
+ * POST /api/upload/presigned-download
+ *
+ * Request body: { key: string }
+ */
+const getPresignedDownloadUrl = async (req, res) => {
+  try {
+    const { key } = req.body;
+
+    if (!key || typeof key !== 'string') {
+      return res.status(400).json({ error: 'key is required' });
+    }
+
+    const presignedUrl = await s3Service.getPresignedUrl(key);
+
+    res.json({
+      success: true,
+      data: {
+        key,
+        presignedUrl
+      }
+    });
+  } catch (error) {
+    console.error('Get presigned download URL error:', error);
+    res.status(500).json({
+      error: 'Failed to generate presigned download URL',
+      details: error.message
+    });
+  }
+};
+
 module.exports = {
   uploadFile,
   uploadMultipleFiles,
@@ -412,6 +513,7 @@ module.exports = {
   createBucket,
   getAllowedTypes,
   getPresignedUploadUrl,
-  getPresignedUploadUrls
+  getPresignedUploadUrls,
+  getPresignedDownloadUrl
 };
 
