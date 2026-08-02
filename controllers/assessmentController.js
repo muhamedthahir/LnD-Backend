@@ -1669,7 +1669,7 @@ const getStartInfo = async (req, res) => {
       full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
       webcam_required: admin.proctoring_config?.webcam_required || false,
       max_tab_switch_allowed: admin.proctoring_config?.max_tab_switch_allowed ?? -1,
-      disable_copy_paste: admin.proctoring_config?.disable_copy_paste || false,
+      disable_copy_paste: !!admin.proctoring_config?.disable_copy_paste,
       auto_submit_on_timeout: admin.timing_config?.auto_submit_on_timeout || false,
       allow_back_navigation: admin.timing_config?.allow_early_segment_submit !== false, // Default true
       negative_marking_enabled: admin.scoring_config?.negative_marking_enabled || false,
@@ -2161,8 +2161,8 @@ const getAssessmentTake = async (req, res) => {
         full_screen_mandatory: admin.proctoring_config?.full_screen_mandatory || false,
         webcam_required: admin.proctoring_config?.webcam_required || false,
         max_tab_switch_allowed: admin.proctoring_config?.max_tab_switch_allowed ?? -1,
-        disable_copy_paste: admin.proctoring_config?.disable_copy_paste || false,
-        disable_right_click: admin.proctoring_config?.disable_right_click || false
+        disable_copy_paste: !!admin.proctoring_config?.disable_copy_paste,
+        disable_right_click: !!admin.proctoring_config?.disable_right_click
       },
       segments: segments.map(s => ({
         id: s.id,
