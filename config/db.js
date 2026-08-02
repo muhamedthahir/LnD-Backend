@@ -14,6 +14,8 @@ const poolOptions = {
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  // Return DATETIME as plain strings so JSON responses are not shifted by server timezone (UTC on EB).
+  dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'],
   // Connection timeout settings
   connectTimeout: 60000, // 60 seconds
   acquireTimeout: 60000, // 60 seconds
