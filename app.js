@@ -36,6 +36,17 @@ PlaygroundProject.createTable().catch(err => {
 
 const app = express();
 
+// Prevent Express ETag/304 responses from serving stale JSON to the SPA after updates.
+app.set('etag', false);
+
+// Dynamic API responses must not be cached by browsers or intermediaries.
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 // Shared allowed origins for CORS (used by main middleware, timeout, error, and 404 handlers)
 const getAllowedOrigins = () => [
   'http://localhost:5173',
@@ -43,6 +54,8 @@ const getAllowedOrigins = () => [
   'http://localhost:3000',
   'https://dnv2vd007hcre.cloudfront.net',
   'https://practice.skillvantix.com',
+  'https://practice.campuszen.in',
+  'https://campuszen.in',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
@@ -50,7 +63,12 @@ const isOriginAllowed = (origin) => {
   if (!origin) return null;
   const allowed = getAllowedOrigins();
   if (allowed.includes(origin)) return origin;
-  if (origin.includes('localhost:5173') || origin.includes('cloudfront.net') || origin.includes('skillvantix.com')) return origin;
+  if (
+    origin.includes('localhost:5173') ||
+    origin.includes('cloudfront.net') ||
+    origin.includes('skillvantix.com') ||
+    origin.includes('campuszen.in')
+  ) return origin;
   return null;
 };
 
