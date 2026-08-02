@@ -53,6 +53,13 @@ const isAssessmentExpired = (endDateTime) => {
   return ts < Date.now();
 };
 
+/** Elapsed whole seconds since a naive wall-clock start datetime (IST by default). */
+const elapsedSecondsSinceWallClock = (startDateTime) => {
+  const startMs = naiveWallClockToTimestamp(startDateTime);
+  if (startMs === null) return 0;
+  return Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+};
+
 /**
  * Normalize datetime-local / ISO strings for MySQL DATETIME columns.
  * Returns null for empty values.
@@ -84,5 +91,6 @@ module.exports = {
   naiveWallClockToTimestamp,
   isAssessmentNotStartedYet,
   isAssessmentExpired,
+  elapsedSecondsSinceWallClock,
   APP_TIMEZONE_OFFSET_MINUTES
 };

@@ -21,7 +21,7 @@ const {
 } = require('../models/AssessmentConfigs');
 const { outputsMatch } = require('../utils/outputCompare');
 const { resolveSegmentQuestionWeight, resolveProgrammingObtainedScore, computeMappingTotalScore } = require('../utils/assessmentScoring');
-const { isAssessmentExpired, isAssessmentNotStartedYet } = require('../utils/assessmentConfigUtils');
+const { isAssessmentExpired, isAssessmentNotStartedYet, elapsedSecondsSinceWallClock } = require('../utils/assessmentConfigUtils');
 
 const formatLabel = (value) => {
   if (!value) return '';
@@ -2057,20 +2057,35 @@ const getAssessmentTake = async (req, res) => {
     // Get saved answers
     const savedAnswers = questionAssignments; // Use the same query result
 
-    // Calculate time remaining
-    const startTime = new Date(mapping.assessment_started_time);
-    const now = new Date();
+    // Calculate time remaining (use IST wall-clock start + persisted timer for active attempts)
     const totalDuration = admin.timing_config?.total_time || 0;
-    const startMs = startTime.getTime();
-    const elapsedSeconds = Number.isFinite(startMs) ? Math.floor((now - startTime) / 1000) : 0;
-    const timeRemaining = Math.max(0, totalDuration - elapsedSeconds);
+    const elapsedSeconds = mapping.assessment_started_time
+      ? elapsedSecondsSinceWallClock(mapping.assessment_started_time)
+      : 0;
+    const persistedTimeRemaining = Number(mapping.time_remaining);
+    let timeRemaining = totalDuration > 0
+      ? Math.max(0, totalDuration - elapsedSeconds)
+      : totalDuration;
 
-    // Server-side backstop for auto-submit on timeout. If the overall wall-clock limit
-    // (plus any grace period) has passed and the config requests auto-submit, finalize the
-    // attempt server-side so a candidate cannot keep working by ignoring the client timer.
+    if (
+      mapping.status === 'IN_PROGRESS' &&
+      Number.isFinite(persistedTimeRemaining) &&
+      persistedTimeRemaining > 0
+    ) {
+      timeRemaining = persistedTimeRemaining;
+    }
+
+    // Server-side backstop for auto-submit on timeout.
     const autoSubmitOnTimeout = admin.timing_config?.auto_submit_on_timeout !== false; // default true
     const gracePeriodSeconds = admin.timing_config?.grace_period_seconds || 0;
-    if (autoSubmitOnTimeout && totalDuration > 0 && elapsedSeconds > (totalDuration + gracePeriodSeconds)) {
+    const timedOutByElapsed = totalDuration > 0 && elapsedSeconds > (totalDuration + gracePeriodSeconds);
+    const hasActivePersistedTime = (
+      mapping.status === 'IN_PROGRESS' &&
+      Number.isFinite(persistedTimeRemaining) &&
+      persistedTimeRemaining > 0
+    );
+
+    if (autoSubmitOnTimeout && timedOutByElapsed && !hasActivePersistedTime) {
       try {
         const submitResult = await AssessmentUserMapping.submitAssessment(mapping_id);
         return res.json({
@@ -2086,17 +2101,25 @@ const getAssessmentTake = async (req, res) => {
     // Calculate segment time remaining if segment-wise timing
     let segmentTimeRemaining = 0;
     if (admin.timing_config?.timing_mode === 'SEGMENT_WISE' && currentSegment.segment_duration) {
+      const persistedSegmentTime = Number(mapping.segment_time_remaining);
+      if (
+        mapping.status === 'IN_PROGRESS' &&
+        Number.isFinite(persistedSegmentTime) &&
+        persistedSegmentTime > 0
+      ) {
+        segmentTimeRemaining = persistedSegmentTime;
+      } else {
       // Get segment start time from progress
       const [progressRows] = await pool.execute(
         'SELECT * FROM assessment_segment_progress WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?',
         [mapping_id, currentSegment.id]
       );
       if (progressRows[0]?.started_at) {
-        const segmentStartTime = new Date(progressRows[0].started_at);
-        const segmentElapsed = Math.floor((now - segmentStartTime) / 1000);
+        const segmentElapsed = elapsedSecondsSinceWallClock(progressRows[0].started_at);
         segmentTimeRemaining = Math.max(0, currentSegment.segment_duration - segmentElapsed);
       } else {
         segmentTimeRemaining = currentSegment.segment_duration;
+      }
       }
     }
 
