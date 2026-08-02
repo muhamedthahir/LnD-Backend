@@ -49,6 +49,39 @@ class AssessmentSegment {
     try {
       await pool.execute(`ALTER TABLE assessment_segments ADD COLUMN question_bank_id INT DEFAULT NULL`);
     } catch (e) { /* column already exists */ }
+    try {
+      await pool.execute(`ALTER TABLE assessment_segments ADD COLUMN allowed_language_ids JSON DEFAULT NULL`);
+    } catch (e) { /* column already exists */ }
+  }
+
+  static parseAllowedLanguageIds(raw) {
+    if (raw == null || raw === '') return null;
+    if (Array.isArray(raw)) {
+      const ids = raw.map(Number).filter((n) => !Number.isNaN(n));
+      return ids.length ? ids : null;
+    }
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!Array.isArray(parsed) || parsed.length === 0) return null;
+      const ids = parsed.map(Number).filter((n) => !Number.isNaN(n));
+      return ids.length ? ids : null;
+    } catch {
+      return null;
+    }
+  }
+
+  static serializeAllowedLanguageIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return null;
+    const normalized = ids.map(Number).filter((n) => !Number.isNaN(n));
+    return normalized.length ? JSON.stringify(normalized) : null;
+  }
+
+  static normalizeSegmentRow(row) {
+    if (!row) return row;
+    return {
+      ...row,
+      allowed_language_ids: this.parseAllowedLanguageIds(row.allowed_language_ids)
+    };
   }
 
   /**
@@ -73,6 +106,7 @@ class AssessmentSegment {
       negative_marking_enabled = null,
       question_source = 'POOL',
       question_bank_id = null,
+      allowed_language_ids = null,
       created_by
     } = segmentData;
 
@@ -92,11 +126,13 @@ class AssessmentSegment {
       const [result] = await pool.execute(
         `INSERT INTO assessment_segments 
          (unique_id, assessment_id, name, description, sequence_order, segment_duration, 
-          allow_back_navigation, is_locked, negative_marking_enabled, question_source, question_bank_id, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          allow_back_navigation, is_locked, negative_marking_enabled, question_source, question_bank_id,
+          allowed_language_ids, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [unique_id, assessment_id, name, description, order, segment_duration,
          allow_back_navigation, is_locked, negative_marking_enabled,
-         question_source || 'POOL', question_bank_id || null, created_by]
+         question_source || 'POOL', question_bank_id || null,
+         this.serializeAllowedLanguageIds(allowed_language_ids), created_by]
       );
 
       // Update assessment total duration
@@ -123,7 +159,7 @@ class AssessmentSegment {
        WHERE s.id = ?`,
       [id]
     );
-    return rows[0] || null;
+    return this.normalizeSegmentRow(rows[0] || null);
   }
 
   /**
@@ -137,7 +173,7 @@ class AssessmentSegment {
        WHERE s.unique_id = ?`,
       [unique_id]
     );
-    return rows[0] || null;
+    return this.normalizeSegmentRow(rows[0] || null);
   }
 
   /**
@@ -153,7 +189,7 @@ class AssessmentSegment {
        ORDER BY s.sequence_order ASC`,
       [assessment_id]
     );
-    return rows;
+    return rows.map((row) => this.normalizeSegmentRow(row));
   }
 
   /**
@@ -169,7 +205,8 @@ class AssessmentSegment {
       is_locked,
       negative_marking_enabled,
       question_source,
-      question_bank_id
+      question_bank_id,
+      allowed_language_ids
     } = segmentData;
 
     // Get current segment to know assessment_id
@@ -189,23 +226,38 @@ class AssessmentSegment {
     const safeQuestionBankId = question_source === 'BANK'
       ? (question_bank_id || null)
       : (question_source === 'POOL' ? null : (question_bank_id !== undefined ? question_bank_id : segment.question_bank_id ?? null));
+    const safeAllowedLanguageIds = allowed_language_ids !== undefined
+      ? this.serializeAllowedLanguageIds(allowed_language_ids)
+      : undefined;
+
+    const updateFields = [
+      'name = COALESCE(?, name)',
+      'description = COALESCE(?, description)',
+      'sequence_order = COALESCE(?, sequence_order)',
+      'segment_duration = COALESCE(?, segment_duration)',
+      'allow_back_navigation = COALESCE(?, allow_back_navigation)',
+      'is_locked = COALESCE(?, is_locked)',
+      'negative_marking_enabled = ?',
+      'question_source = COALESCE(?, question_source)',
+      'question_bank_id = ?'
+    ];
+    const params = [
+      safeName, safeDescription, safeSequenceOrder, safeSegmentDuration,
+      safeAllowBackNavigation, safeIsLocked, safeNegativeMarkingEnabled,
+      safeQuestionSource, safeQuestionBankId
+    ];
+
+    if (safeAllowedLanguageIds !== undefined) {
+      updateFields.push('allowed_language_ids = ?');
+      params.push(safeAllowedLanguageIds);
+    }
+
+    params.push(id);
 
     try {
       await pool.execute(
-        `UPDATE assessment_segments SET
-           name = COALESCE(?, name),
-           description = COALESCE(?, description),
-           sequence_order = COALESCE(?, sequence_order),
-           segment_duration = COALESCE(?, segment_duration),
-           allow_back_navigation = COALESCE(?, allow_back_navigation),
-           is_locked = COALESCE(?, is_locked),
-           negative_marking_enabled = ?,
-           question_source = COALESCE(?, question_source),
-           question_bank_id = ?
-         WHERE id = ?`,
-        [safeName, safeDescription, safeSequenceOrder, safeSegmentDuration, 
-         safeAllowBackNavigation, safeIsLocked, safeNegativeMarkingEnabled,
-         safeQuestionSource, safeQuestionBankId, id]
+        `UPDATE assessment_segments SET ${updateFields.join(', ')} WHERE id = ?`,
+        params
       );
 
       // Update assessment total duration
@@ -398,6 +450,9 @@ class AssessmentSegment {
       allow_back_navigation: segment.allow_back_navigation,
       is_locked: segment.is_locked,
       negative_marking_enabled: segment.negative_marking_enabled,
+      question_source: segment.question_source,
+      question_bank_id: segment.question_bank_id,
+      allowed_language_ids: segment.allowed_language_ids,
       created_by
     });
 

@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const ExcelJS = require('exceljs');
 const Assessment = require('../models/Assessment');
 const AssessmentSegment = require('../models/AssessmentSegment');
+const ProgrammingQuestion = require('../models/ProgrammingQuestion');
 const AssessmentAdministrator = require('../models/AssessmentAdministrator');
 const AssessmentUserMapping = require('../models/AssessmentUserMapping');
 const MCQSubmission = require('../models/MCQSubmission');
@@ -300,7 +301,7 @@ const duplicateAssessment = async (req, res) => {
  */
 const createSegment = async (req, res) => {
   try {
-    const { assessment_id, name, description, segment_duration, allow_back_navigation, is_locked, question_source, question_bank_id } = req.body;
+    const { assessment_id, name, description, segment_duration, allow_back_navigation, is_locked, question_source, question_bank_id, allowed_language_ids } = req.body;
 
     if (!assessment_id || !name) {
       return res.status(400).json({ error: 'Assessment ID and name are required' });
@@ -315,6 +316,7 @@ const createSegment = async (req, res) => {
       is_locked,
       question_source,
       question_bank_id,
+      allowed_language_ids,
       created_by: req.user.id
     });
 
@@ -367,7 +369,7 @@ const getSegment = async (req, res) => {
 const updateSegment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, segment_duration, allow_back_navigation, is_locked, negative_marking_enabled, question_source, question_bank_id } = req.body;
+    const { name, description, segment_duration, allow_back_navigation, is_locked, negative_marking_enabled, question_source, question_bank_id, allowed_language_ids } = req.body;
 
     await AssessmentSegment.update(id, {
       name,
@@ -377,7 +379,8 @@ const updateSegment = async (req, res) => {
       is_locked,
       negative_marking_enabled,
       question_source,
-      question_bank_id
+      question_bank_id,
+      allowed_language_ids
     });
 
     res.json({ message: 'Segment updated successfully' });
@@ -1987,26 +1990,13 @@ const getAssessmentTake = async (req, res) => {
              ORDER BY \`order\` ASC, id ASC`,
             [pqRows[0].id]
           );
-          
-          questions.push({
-            ...pqRows[0],
-            question_type: 'PROGRAMMING',
-            programming_question_id: pqRows[0].id,
-            problem_statement: pqRows[0].name || pqRows[0].description,
-            sequence_order: assignment.sequence_order,
-            weightage: assignment.weightage,
-            positive_marks: pqRows[0].positive_marks || pqRows[0].points || 0,
-            negative_marks: pqRows[0].negative_marks || 0,
-            neutral_marks: pqRows[0].neutral_marks || 0,
-            test_cases: testCaseRows.map(tc => ({
-              id: tc.id,
-              input: tc.input,
-              expected_output: tc.expected_result,
-              description: tc.description,
-              is_hidden: tc.is_hidden,
-              points: tc.weight
-            }))
-          });
+
+          questions.push(await buildProgrammingQuestionForTake(
+            pqRows[0],
+            assignment,
+            currentSegment,
+            testCaseRows
+          ));
         }
       } else if (assignment.question_type === 'MCQ') {
         const [mqRows] = await pool.execute(
@@ -3368,6 +3358,46 @@ const switchSegment = async (req, res) => {
 };
 
 
+// Helper: attach languages/code templates to programming questions for the take UI
+const buildProgrammingQuestionForTake = async (pqRow, assignment, segment, testCaseRows) => {
+  let allowedLanguages = await ProgrammingQuestion.getLanguages(pqRow.id);
+  let codeTemplates = await ProgrammingQuestion.getCodeTemplates(pqRow.id);
+
+  const segmentRestriction = AssessmentSegment.parseAllowedLanguageIds(segment?.allowed_language_ids);
+  if (segmentRestriction) {
+    const allowedSet = new Set(segmentRestriction);
+    allowedLanguages = allowedLanguages.filter((lang) => allowedSet.has(lang.id));
+    codeTemplates = codeTemplates.filter((template) => allowedSet.has(template.language_id));
+  }
+
+  return {
+    ...pqRow,
+    question_type: 'PROGRAMMING',
+    programming_question_id: pqRow.id,
+    problem_statement: pqRow.name || pqRow.description,
+    sequence_order: assignment.sequence_order,
+    weightage: assignment.weightage,
+    positive_marks: pqRow.positive_marks || pqRow.points || 0,
+    negative_marks: pqRow.negative_marks || 0,
+    neutral_marks: pqRow.neutral_marks || 0,
+    allowed_languages: allowedLanguages,
+    code_templates: codeTemplates.map((template) => ({
+      language_id: template.language_id,
+      language_name: template.language_name,
+      template_code: template.template_code,
+      solution_code: template.solution_code
+    })),
+    test_cases: (testCaseRows || []).map((tc) => ({
+      id: tc.id,
+      input: tc.input,
+      expected_output: tc.expected_result,
+      description: tc.description,
+      is_hidden: tc.is_hidden,
+      points: tc.weight
+    }))
+  };
+};
+
 // Deterministic seeded shuffle: stable per (user attempt + question) so a candidate sees a
 // consistent order across reloads/resumes, but different candidates get different orders.
 // MCQ answers are stored/scored by option id, so reordering the display is always safe.
@@ -3397,6 +3427,7 @@ const seededShuffle = (array, seedStr) => {
 // Helper function to get segment questions
 const getSegmentQuestions = async (segmentId, mappingId) => {
   const assignments = await UserQuestionAssignment.getByMappingAndSegment(mappingId, segmentId);
+  const segment = await AssessmentSegment.findById(segmentId);
   const questions = [];
 
   // Load whether MCQ options should be shuffled for this assessment
@@ -3433,22 +3464,12 @@ const getSegmentQuestions = async (segmentId, mappingId) => {
           [pqRows[0].id]
         );
 
-        questions.push({
-          ...pqRows[0],
-          question_type: 'PROGRAMMING',
-          programming_question_id: pqRows[0].id,
-          problem_statement: pqRows[0].name || pqRows[0].description,
-          sequence_order: assignment.sequence_order,
-          weightage: assignment.weightage,
-          test_cases: testCaseRows.map(tc => ({
-            id: tc.id,
-            input: tc.input,
-            expected_output: tc.expected_result,
-            description: tc.description,
-            is_hidden: tc.is_hidden,
-            points: tc.weight
-          }))
-        });
+        questions.push(await buildProgrammingQuestionForTake(
+          pqRows[0],
+          assignment,
+          segment,
+          testCaseRows
+        ));
       }
     } else if (assignment.question_type === 'MCQ') {
       const [mqRows] = await pool.execute(
