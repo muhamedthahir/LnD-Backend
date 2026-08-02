@@ -1,5 +1,20 @@
 // codeEditorController.js
 
+const {
+  getPistonExecuteUrl,
+  getPistonRuntimesUrl,
+  isPistonConfigured,
+  getPistonBaseUrl,
+  PISTON_FETCH_TIMEOUT_MS
+} = require('../utils/pistonConfig');
+
+const fetchPiston = async (url, options = {}) => {
+  return fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(PISTON_FETCH_TIMEOUT_MS)
+  });
+};
+
 /**
  * Execute code using Piston API
  * Piston is a code execution engine that supports multiple languages
@@ -16,10 +31,14 @@ const executeCode = async (req, res) => {
       return res.status(400).json({ error: 'Code is required' });
     }
 
-    // Get Piston API configuration from environment variables
-    const pistonUrl = process.env.PISTON_URL || 'http://localhost';
-    const pistonPort = process.env.PISTON_PORT || '2000';
-    const pistonEndpoint = `${pistonUrl}:${pistonPort}/api/v2/execute`;
+    if (!isPistonConfigured()) {
+      return res.status(503).json({
+        error: 'Code execution service is not configured',
+        details: 'Set PISTON_URL and PISTON_PORT on the backend server (Elastic Beanstalk environment variables).'
+      });
+    }
+
+    const pistonEndpoint = getPistonExecuteUrl();
 
     // Use language as-is (no conversion)
     const pistonLanguage = language.toLowerCase();
@@ -62,13 +81,22 @@ const executeCode = async (req, res) => {
     console.log(`Executing ${language} code via Piston API at ${pistonEndpoint} with payload: ${JSON.stringify(pistonPayload)}`);
 
     // Make request to Piston API
-    const response = await fetch(pistonEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(pistonPayload)
-    });
+    let response;
+    try {
+      response = await fetchPiston(pistonEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(pistonPayload)
+      });
+    } catch (networkError) {
+      console.error('Piston network error:', networkError);
+      return res.status(503).json({
+        error: 'Code execution service is unreachable',
+        details: `Could not connect to Piston at ${getPistonBaseUrl()}. ${networkError.message}`
+      });
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -116,11 +144,25 @@ const executeCode = async (req, res) => {
  */
 const getRuntimes = async (req, res) => {
   try {
-    const pistonUrl = process.env.PISTON_URL || 'http://localhost';
-    const pistonPort = process.env.PISTON_PORT || '2000';
-    const runtimesEndpoint = `${pistonUrl}:${pistonPort}/api/v2/runtimes`;
+    if (!isPistonConfigured()) {
+      return res.status(503).json({
+        error: 'Code execution service is not configured',
+        details: 'Set PISTON_URL and PISTON_PORT on the backend server.'
+      });
+    }
 
-    const response = await fetch(runtimesEndpoint);
+    const runtimesEndpoint = getPistonRuntimesUrl();
+
+    let response;
+    try {
+      response = await fetchPiston(runtimesEndpoint);
+    } catch (networkError) {
+      console.error('Piston runtimes network error:', networkError);
+      return res.status(503).json({
+        error: 'Code execution service is unreachable',
+        details: networkError.message
+      });
+    }
 
     if (!response.ok) {
       return res.status(response.status).json({ 
