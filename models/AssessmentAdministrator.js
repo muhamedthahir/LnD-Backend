@@ -1,5 +1,18 @@
 const pool = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
+const { normalizeDateTimeForDb } = require('../utils/assessmentConfigUtils');
+
+const upsertConfigByAdminId = async (connection, table, adminId, updateFn, insertFn) => {
+  const [rows] = await connection.execute(
+    `SELECT id FROM ${table} WHERE assessment_administrator_id = ? LIMIT 1`,
+    [adminId]
+  );
+  if (rows.length === 0) {
+    await insertFn();
+  } else {
+    await updateFn();
+  }
+};
 
 class AssessmentAdministrator {
   /**
@@ -110,8 +123,8 @@ class AssessmentAdministrator {
         [adminId, 
          timingConfig.total_time || 0,
          timingConfig.timing_mode || 'SEGMENT_WISE',
-         timingConfig.start_date_time || null,
-         timingConfig.end_date_time || null,
+         normalizeDateTimeForDb(timingConfig.start_date_time),
+         normalizeDateTimeForDb(timingConfig.end_date_time),
          timingConfig.allow_early_segment_submit !== false,
          timingConfig.carry_forward_time || false,
          timingConfig.auto_submit_on_timeout !== false,
@@ -497,75 +510,154 @@ class AssessmentAdministrator {
       // Update timing config if provided
       if (configData.timing) {
         const tc = configData.timing;
-        // Convert undefined to null
-        const startDateTime = tc.start_date_time !== undefined ? tc.start_date_time : null;
-        const endDateTime = tc.end_date_time !== undefined ? tc.end_date_time : null;
-        await connection.execute(
-          `UPDATE timing_configs SET
-             total_time = COALESCE(?, total_time),
-             timing_mode = COALESCE(?, timing_mode),
-             start_date_time = ?,
-             end_date_time = ?,
-             allow_early_segment_submit = COALESCE(?, allow_early_segment_submit),
-             carry_forward_time = COALESCE(?, carry_forward_time),
-             auto_submit_on_timeout = COALESCE(?, auto_submit_on_timeout),
-             grace_period_seconds = COALESCE(?, grace_period_seconds)
-           WHERE assessment_administrator_id = ?`,
-          [tc.total_time, tc.timing_mode, startDateTime, endDateTime,
-           tc.allow_early_segment_submit, tc.carry_forward_time, tc.auto_submit_on_timeout,
-           tc.grace_period_seconds, id]
+        const startDateTime = normalizeDateTimeForDb(tc.start_date_time);
+        const endDateTime = normalizeDateTimeForDb(tc.end_date_time);
+        const timingValues = [
+          tc.total_time ?? 0,
+          tc.timing_mode || 'SEGMENT_WISE',
+          startDateTime,
+          endDateTime,
+          tc.allow_early_segment_submit !== false,
+          tc.carry_forward_time || false,
+          tc.auto_submit_on_timeout !== false,
+          tc.grace_period_seconds ?? 0
+        ];
+
+        await upsertConfigByAdminId(
+          connection,
+          'timing_configs',
+          id,
+          () => connection.execute(
+            `UPDATE timing_configs SET
+               total_time = ?,
+               timing_mode = ?,
+               start_date_time = ?,
+               end_date_time = ?,
+               allow_early_segment_submit = ?,
+               carry_forward_time = ?,
+               auto_submit_on_timeout = ?,
+               grace_period_seconds = ?
+             WHERE assessment_administrator_id = ?`,
+            [...timingValues, id]
+          ),
+          () => connection.execute(
+            `INSERT INTO timing_configs
+             (assessment_administrator_id, total_time, timing_mode, start_date_time, end_date_time,
+              allow_early_segment_submit, carry_forward_time, auto_submit_on_timeout, grace_period_seconds)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, ...timingValues]
+          )
         );
       }
 
       // Update proctoring config if provided
       if (configData.proctoring) {
         const pc = configData.proctoring;
-        await connection.execute(
-          `UPDATE proctoring_configs SET
-             proctoring_enabled = COALESCE(?, proctoring_enabled),
-             full_screen_mandatory = COALESCE(?, full_screen_mandatory),
-             webcam_required = COALESCE(?, webcam_required),
-             max_tab_switch_allowed = COALESCE(?, max_tab_switch_allowed),
-             allow_segment_switch = COALESCE(?, allow_segment_switch),
-             disable_copy_paste = COALESCE(?, disable_copy_paste),
-             disable_right_click = COALESCE(?, disable_right_click)
-           WHERE assessment_administrator_id = ?`,
-          [pc.proctoring_enabled, pc.full_screen_mandatory, pc.webcam_required,
-           pc.max_tab_switch_allowed, pc.allow_segment_switch, pc.disable_copy_paste, pc.disable_right_click, id]
+        const proctoringValues = [
+          pc.proctoring_enabled || false,
+          pc.full_screen_mandatory || false,
+          pc.webcam_required || false,
+          pc.max_tab_switch_allowed ?? -1,
+          pc.allow_segment_switch !== false,
+          pc.disable_copy_paste || false,
+          pc.disable_right_click || false
+        ];
+
+        await upsertConfigByAdminId(
+          connection,
+          'proctoring_configs',
+          id,
+          () => connection.execute(
+            `UPDATE proctoring_configs SET
+               proctoring_enabled = ?,
+               full_screen_mandatory = ?,
+               webcam_required = ?,
+               max_tab_switch_allowed = ?,
+               allow_segment_switch = ?,
+               disable_copy_paste = ?,
+               disable_right_click = ?
+             WHERE assessment_administrator_id = ?`,
+            [...proctoringValues, id]
+          ),
+          () => connection.execute(
+            `INSERT INTO proctoring_configs
+             (assessment_administrator_id, proctoring_enabled, full_screen_mandatory, webcam_required,
+              max_tab_switch_allowed, allow_segment_switch, disable_copy_paste, disable_right_click)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, ...proctoringValues]
+          )
         );
       }
 
       // Update scoring config if provided
       if (configData.scoring) {
         const sc = configData.scoring;
-        await connection.execute(
-          `UPDATE scoring_configs SET
-             threshold_for_pass = COALESCE(?, threshold_for_pass),
-             threshold_type = COALESCE(?, threshold_type),
-             negative_marking_enabled = COALESCE(?, negative_marking_enabled),
-             negative_mark_percentage = COALESCE(?, negative_mark_percentage),
-             show_score_at_end = COALESCE(?, show_score_at_end),
-             show_correct_answers_after = COALESCE(?, show_correct_answers_after),
-             show_feedback_or_rating = COALESCE(?, show_feedback_or_rating)
-           WHERE assessment_administrator_id = ?`,
-          [sc.threshold_for_pass, sc.threshold_type, sc.negative_marking_enabled,
-           sc.negative_mark_percentage, sc.show_score_at_end, sc.show_correct_answers_after,
-           sc.show_feedback_or_rating, id]
+        const scoringValues = [
+          sc.threshold_for_pass ?? 40,
+          sc.threshold_type || 'PERCENTAGE',
+          sc.negative_marking_enabled || false,
+          sc.negative_mark_percentage ?? 0,
+          sc.show_score_at_end || false,
+          sc.show_correct_answers_after || false,
+          sc.show_feedback_or_rating !== false
+        ];
+
+        await upsertConfigByAdminId(
+          connection,
+          'scoring_configs',
+          id,
+          () => connection.execute(
+            `UPDATE scoring_configs SET
+               threshold_for_pass = ?,
+               threshold_type = ?,
+               negative_marking_enabled = ?,
+               negative_mark_percentage = ?,
+               show_score_at_end = ?,
+               show_correct_answers_after = ?,
+               show_feedback_or_rating = ?
+             WHERE assessment_administrator_id = ?`,
+            [...scoringValues, id]
+          ),
+          () => connection.execute(
+            `INSERT INTO scoring_configs
+             (assessment_administrator_id, threshold_for_pass, threshold_type, negative_marking_enabled,
+              negative_mark_percentage, show_score_at_end, show_correct_answers_after, show_feedback_or_rating)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, ...scoringValues]
+          )
         );
       }
 
       // Update question config if provided
       if (configData.question) {
         const qc = configData.question;
-        await connection.execute(
-          `UPDATE question_configs SET
-             fetch_random_question = COALESCE(?, fetch_random_question),
-             randomize_question_to_users = COALESCE(?, randomize_question_to_users),
-             shuffle_options_in_mcq = COALESCE(?, shuffle_options_in_mcq),
-             allow_review_before_submit = COALESCE(?, allow_review_before_submit)
-           WHERE assessment_administrator_id = ?`,
-          [qc.fetch_random_question, qc.randomize_question_to_users,
-           qc.shuffle_options_in_mcq, qc.allow_review_before_submit, id]
+        const questionValues = [
+          qc.fetch_random_question || false,
+          qc.randomize_question_to_users || false,
+          qc.shuffle_options_in_mcq || false,
+          qc.allow_review_before_submit !== false
+        ];
+
+        await upsertConfigByAdminId(
+          connection,
+          'question_configs',
+          id,
+          () => connection.execute(
+            `UPDATE question_configs SET
+               fetch_random_question = ?,
+               randomize_question_to_users = ?,
+               shuffle_options_in_mcq = ?,
+               allow_review_before_submit = ?
+             WHERE assessment_administrator_id = ?`,
+            [...questionValues, id]
+          ),
+          () => connection.execute(
+            `INSERT INTO question_configs
+             (assessment_administrator_id, fetch_random_question, randomize_question_to_users,
+              shuffle_options_in_mcq, allow_review_before_submit)
+             VALUES (?, ?, ?, ?, ?)`,
+            [id, ...questionValues]
+          )
         );
         
         // Handle segment-wise randomization if fetch_random_question is enabled
@@ -677,24 +769,42 @@ class AssessmentAdministrator {
       // Update access config if provided
       if (configData.access) {
         const ac = configData.access;
-        // Convert undefined to null
-        const accessCode = ac.access_code !== undefined ? ac.access_code : null;
-        const ipRestriction = ac.ip_restriction !== undefined ? ac.ip_restriction : null;
-        await connection.execute(
-          `UPDATE access_configs SET
-             access_code = ?,
-             max_attempts = COALESCE(?, max_attempts),
-             allow_resume = COALESCE(?, allow_resume),
-             resume_window_minutes = COALESCE(?, resume_window_minutes),
-             ip_restriction = ?
-           WHERE assessment_administrator_id = ?`,
-          [accessCode, ac.max_attempts, ac.allow_resume,
-           ac.resume_window_minutes, ipRestriction, id]
+        const accessCode = ac.access_code?.trim() ? ac.access_code.trim() : null;
+        const ipRestriction = ac.ip_restriction?.trim() ? ac.ip_restriction.trim() : null;
+        const accessValues = [
+          accessCode,
+          ac.max_attempts ?? 1,
+          ac.allow_resume !== false,
+          ac.resume_window_minutes ?? 30,
+          ipRestriction
+        ];
+
+        await upsertConfigByAdminId(
+          connection,
+          'access_configs',
+          id,
+          () => connection.execute(
+            `UPDATE access_configs SET
+               access_code = ?,
+               max_attempts = ?,
+               allow_resume = ?,
+               resume_window_minutes = ?,
+               ip_restriction = ?
+             WHERE assessment_administrator_id = ?`,
+            [...accessValues, id]
+          ),
+          () => connection.execute(
+            `INSERT INTO access_configs
+             (assessment_administrator_id, access_code, max_attempts, allow_resume,
+              resume_window_minutes, ip_restriction)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [id, ...accessValues]
+          )
         );
       }
 
       await connection.commit();
-      return true;
+      return await this.findById(id);
     } catch (error) {
       await connection.rollback();
       throw error;

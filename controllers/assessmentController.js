@@ -696,8 +696,15 @@ const updateAdministrator = async (req, res) => {
     const { id } = req.params;
     const { adminData, configData } = req.body;
 
-    await AssessmentAdministrator.update(id, adminData, configData);
-    res.json({ message: 'Administrator updated successfully' });
+    const administrator = await AssessmentAdministrator.update(id, adminData, configData);
+    if (!administrator) {
+      return res.status(404).json({ error: 'Administrator not found' });
+    }
+
+    res.json({
+      message: 'Administrator updated successfully',
+      administrator
+    });
   } catch (error) {
     console.error('Error updating administrator:', error);
     res.status(500).json({ error: 'Failed to update administrator' });
