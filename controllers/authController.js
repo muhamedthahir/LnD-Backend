@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { generateTokens, generateAccessToken, verifyAccessToken, extractToken } = require('../utils/jwt');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmail } = require('../utils/emailService');
-const { sendTemplateEmail } = require('../services/sesEmailService');
+const { sendPasswordResetEmail } = require('../services/sesEmailService');
 
 class AuthController {
   static async register(req, res) {
@@ -242,16 +242,12 @@ class AuthController {
         const baseUrl = process.env.FRONTEND_URL || req.headers.origin || '';
         const resetLink = `${baseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
 
-        const emailResult = await sendTemplateEmail({
-          templateUniqueId: 'reset-password',
-          to: email,
-          variables: {
-            name: user.name || '',
-            email,
-            reset_link: resetLink
-          },
-          userId: user.id
-        });
+        const emailResult = await sendPasswordResetEmail(
+          email,
+          user.name,
+          resetLink,
+          user.id
+        );
 
         if (!emailResult.success) {
           return res.status(500).json({ error: emailResult.error || 'Failed to send reset email' });

@@ -6,6 +6,7 @@ require('./config/db.js'); // Initialize database connection
  
 // Import WebSocket server for interactive code execution
 const WebSocketServer = require('./services/WebSocketServer');
+const { getSESStatus } = require('./services/sesEmailService');
 
 // Initialize database tables
 const CourseAdministration = require('./models/CourseAdministration');
@@ -169,6 +170,9 @@ app.use('/api/playground', require('./routes/playgroundRoutes'));
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
 });
+app.get('/health/email', (req, res) => {
+  res.json({ status: 'OK', email: getSESStatus() });
+});
 app.get('/', (req, res) => {
   res.send('Backend is running!');
 });
@@ -182,6 +186,9 @@ app.get('/env-test', (req, res) => {
     AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
     AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
     AWS_REGION: process.env.AWS_REGION,
+    AWS_SES_REGION: process.env.AWS_SES_REGION,
+    SES_DEFAULT_FROM: process.env.SES_DEFAULT_FROM,
+    PLATFORM_NAME: process.env.PLATFORM_NAME,
     S3_BUCKET_NAME: process.env.S3_BUCKET_NAME,
     PISTON_URL: process.env.PISTON_URL,
     PISTON_PORT: process.env.PISTON_PORT,

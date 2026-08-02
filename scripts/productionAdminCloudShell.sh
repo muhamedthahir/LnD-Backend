@@ -9,6 +9,24 @@ REGION="ap-south-1"
 APP="backend"
 ENV="Backend-env"
 
+echo "==> Updating Piston URL for code execution..."
+aws elasticbeanstalk update-environment \
+  --environment-name "$ENV" \
+  --region "$REGION" \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:application:environment,OptionName=PISTON_URL,Value=http://13.202.132.234 \
+    Namespace=aws:elasticbeanstalk:application:environment,OptionName=PISTON_PORT,Value=2000
+
+echo "==> Updating SES email environment variables..."
+aws elasticbeanstalk update-environment \
+  --environment-name "$ENV" \
+  --region "$REGION" \
+  --option-settings \
+    Namespace=aws:elasticbeanstalk:application:environment,OptionName=AWS_SES_REGION,Value=ap-south-1 \
+    Namespace=aws:elasticbeanstalk:application:environment,OptionName=SES_DEFAULT_FROM,Value=noreply@campuszen.in \
+    Namespace=aws:elasticbeanstalk:application:environment,OptionName=PLATFORM_NAME,Value=CampusZen \
+    Namespace=aws:elasticbeanstalk:application:environment,OptionName=FRONTEND_URL,Value=https://practice.campuszen.in
+
 echo "==> Restarting Elastic Beanstalk app servers..."
 aws elasticbeanstalk restart-app-server \
   --environment-name "$ENV" \

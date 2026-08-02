@@ -73,7 +73,7 @@ const sendEmail = async ({
   let mailStatusId = null;
   
   // Default sender
-  const defaultFrom = process.env.SES_DEFAULT_FROM || process.env.EMAIL_FROM || 'noreply@sarkartech.in';
+  const defaultFrom = process.env.SES_DEFAULT_FROM || process.env.EMAIL_FROM || 'noreply@campuszen.in';
   const senderEmail = from || defaultFrom;
   
   // Prepare email content
@@ -359,11 +359,53 @@ const verifySESEmail = async (email) => {
   }
 };
 
+const sendPasswordResetEmail = async (email, name, resetLink, userId = null) => {
+  const result = await sendTemplateEmail({
+    templateUniqueId: 'reset-password',
+    to: email,
+    variables: {
+      name: name || '',
+      email,
+      reset_link: resetLink
+    },
+    userId
+  });
+
+  if (!result.success && result.error?.includes('Template not found')) {
+    return await sendEmail({
+      to: email,
+      subject: 'Reset your password',
+      htmlBody: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #1e3a5f;">Reset your password</h2>
+          <p>Hello ${name || 'there'},</p>
+          <p>We received a request to reset the password for ${email}.</p>
+          <p><a href="${resetLink}">Reset Password</a></p>
+          <p>If you did not request this, you can ignore this email.</p>
+        </div>
+      `,
+      textBody: `Reset your password\n\nHello ${name || 'there'},\n\nReset link: ${resetLink}\n\nIf you did not request this, you can ignore this email.`,
+      userId
+    });
+  }
+
+  return result;
+};
+
+const getSESStatus = () => ({
+  configured: isSESConfigured(),
+  region: process.env.AWS_SES_REGION || process.env.AWS_REGION || 'us-east-1',
+  defaultFrom: process.env.SES_DEFAULT_FROM || process.env.EMAIL_FROM || 'noreply@campuszen.in',
+  platformName: process.env.PLATFORM_NAME || 'LnD Platform'
+});
+
 module.exports = {
   sendEmail,
   sendTemplateEmail,
   sendOTPEmailWithTemplate,
+  sendPasswordResetEmail,
   isSESConfigured,
+  getSESStatus,
   replaceTemplateVariables,
   verifySESEmail
 };
