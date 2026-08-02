@@ -21,6 +21,7 @@ const {
 } = require('../models/AssessmentConfigs');
 const { outputsMatch } = require('../utils/outputCompare');
 const { resolveSegmentQuestionWeight, resolveProgrammingObtainedScore, computeMappingTotalScore } = require('../utils/assessmentScoring');
+const { isAssessmentExpired, isAssessmentNotStartedYet } = require('../utils/assessmentConfigUtils');
 
 const formatLabel = (value) => {
   if (!value) return '';
@@ -1497,7 +1498,7 @@ const retakeAssessment = async (req, res) => {
 
     // Don't allow a retake after the assessment window has closed.
     const timingConfig = await TimingConfig.findByAdminId(mapping.assessment_administrator_id);
-    if (timingConfig?.end_date_time && new Date(timingConfig.end_date_time) < new Date()) {
+    if (timingConfig?.end_date_time && isAssessmentExpired(timingConfig.end_date_time)) {
       return res.status(400).json({ error: 'This assessment has expired' });
     }
 
@@ -1679,6 +1680,8 @@ const getStartInfo = async (req, res) => {
       resume_window_minutes: admin.access_config?.resume_window_minutes || 30,
       max_attempts: admin.access_config?.max_attempts || 1,
       ip_restriction: admin.access_config?.ip_restriction || null,
+      is_not_started_yet: isAssessmentNotStartedYet(admin.timing_config?.start_date_time),
+      is_expired: isAssessmentExpired(admin.timing_config?.end_date_time),
       segments: segments.map(segment => ({
         id: segment.id,
         name: segment.name,
@@ -1737,7 +1740,16 @@ const startAssessment = async (req, res) => {
     });
   } catch (error) {
     console.error('Error starting assessment:', error);
-    res.status(500).json({ error: error.message || 'Failed to start assessment' });
+    const message = error.message || 'Failed to start assessment';
+    const clientErrors = [
+      'Assessment has not started yet',
+      'Assessment has expired',
+      'Assessment already in progress',
+      'Assessment already completed',
+      'Cannot start assessment from'
+    ];
+    const status = clientErrors.some((text) => message.includes(text)) ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 };
 

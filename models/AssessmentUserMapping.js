@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const { resolveSegmentQuestionWeight } = require('../utils/assessmentScoring');
+const { isAssessmentExpired, isAssessmentNotStartedYet } = require('../utils/assessmentConfigUtils');
 const { AssessmentSegmentProgress } = require('./AssessmentConfigs');
 
 class AssessmentUserMapping {
@@ -375,11 +376,10 @@ class AssessmentUserMapping {
 
     let totalTime = 0;
     if (timingConfig[0]) {
-      const now = new Date();
-      if (timingConfig[0].start_date_time && new Date(timingConfig[0].start_date_time) > now) {
+      if (timingConfig[0].start_date_time && isAssessmentNotStartedYet(timingConfig[0].start_date_time)) {
         throw new Error('Assessment has not started yet');
       }
-      if (timingConfig[0].end_date_time && new Date(timingConfig[0].end_date_time) < now) {
+      if (timingConfig[0].end_date_time && isAssessmentExpired(timingConfig[0].end_date_time)) {
         throw new Error('Assessment has expired');
       }
       totalTime = timingConfig[0].total_time || 0;

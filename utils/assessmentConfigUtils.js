@@ -19,9 +19,43 @@ const parseNaiveDateTime = (value) => {
   };
 };
 
+/** Minutes east of UTC for wall-clock datetimes entered in the admin UI (IST default). */
+const APP_TIMEZONE_OFFSET_MINUTES = Number(process.env.APP_TIMEZONE_OFFSET_MINUTES ?? 330);
+
+/**
+ * Convert a naive wall-clock datetime string to UTC epoch ms.
+ */
+const naiveWallClockToTimestamp = (value) => {
+  const parts = parseNaiveDateTime(value);
+  if (!parts) return null;
+
+  const utcMs = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hours),
+    Number(parts.minutes),
+    Number(parts.seconds)
+  );
+
+  return utcMs - APP_TIMEZONE_OFFSET_MINUTES * 60 * 1000;
+};
+
+const isAssessmentNotStartedYet = (startDateTime) => {
+  const ts = naiveWallClockToTimestamp(startDateTime);
+  if (ts === null) return false;
+  return ts > Date.now();
+};
+
+const isAssessmentExpired = (endDateTime) => {
+  const ts = naiveWallClockToTimestamp(endDateTime);
+  if (ts === null) return false;
+  return ts < Date.now();
+};
+
 /**
  * Normalize datetime-local / ISO strings for MySQL DATETIME columns.
- * Values are stored and returned as naive wall-clock times (IST in production use).
+ * Returns null for empty values.
  */
 const normalizeDateTimeForDb = (value) => {
   if (value === null || value === undefined) return null;
@@ -46,5 +80,9 @@ const normalizeDateTimeForDb = (value) => {
 
 module.exports = {
   normalizeDateTimeForDb,
-  parseNaiveDateTime
+  parseNaiveDateTime,
+  naiveWallClockToTimestamp,
+  isAssessmentNotStartedYet,
+  isAssessmentExpired,
+  APP_TIMEZONE_OFFSET_MINUTES
 };
