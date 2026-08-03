@@ -5,7 +5,8 @@ const {
   getPistonRuntimesUrl,
   isPistonConfigured,
   getPistonBaseUrl,
-  PISTON_FETCH_TIMEOUT_MS
+  PISTON_FETCH_TIMEOUT_MS,
+  resolvePistonTimeouts
 } = require('../utils/pistonConfig');
 
 const fetchPiston = async (url, options = {}) => {
@@ -72,8 +73,10 @@ const executeCode = async (req, res) => {
       files: files,
       stdin: stdin,
       args: [],
-      compile_timeout: 10000,
-      run_timeout: 10000,
+      ...resolvePistonTimeouts({
+        compile_timeout: req.body.compile_timeout,
+        run_timeout: req.body.run_timeout
+      }),
       compile_memory_limit: -1,
       run_memory_limit: -1
     };

@@ -23,6 +23,7 @@ const {
 const { outputsMatch } = require('../utils/outputCompare');
 const { resolveSegmentQuestionWeight, resolveProgrammingObtainedScore, computeMappingTotalScore } = require('../utils/assessmentScoring');
 const { isAssessmentExpired, isAssessmentNotStartedYet, elapsedSecondsSinceWallClock } = require('../utils/assessmentConfigUtils');
+const { getPistonExecuteUrl, resolvePistonTimeouts } = require('../utils/pistonConfig');
 
 const formatLabel = (value) => {
   if (!value) return '';
@@ -2986,9 +2987,7 @@ const submitCode = async (req, res) => {
     );
 
     // Run code against all test cases
-    const pistonUrl = process.env.PISTON_URL || 'http://localhost';
-    const pistonPort = process.env.PISTON_PORT || '2000';
-    const pistonEndpoint = `${pistonUrl}:${pistonPort}/api/v2/execute`;
+    const pistonEndpoint = getPistonExecuteUrl();
 
     const languageVersions = {
       'node': '18.15.0',
@@ -3049,8 +3048,7 @@ const submitCode = async (req, res) => {
           files: [{ name: `main.${language === 'python' ? 'py' : language === 'java' ? 'java' : language}`, content: code }],
           stdin: testCase.input || '',
           args: [],
-          compile_timeout: 10000,
-          run_timeout: 10000
+          ...resolvePistonTimeouts()
         };
 
         const response = await fetch(pistonEndpoint, {

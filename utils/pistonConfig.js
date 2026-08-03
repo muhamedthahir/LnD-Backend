@@ -31,11 +31,32 @@ const isPistonConfigured = () => {
 };
 
 const PISTON_FETCH_TIMEOUT_MS = Number(process.env.PISTON_TIMEOUT_MS || 20000);
+const PISTON_MAX_COMPILE_TIMEOUT_MS = Number(process.env.PISTON_MAX_COMPILE_TIMEOUT_MS || 3000);
+const PISTON_MAX_RUN_TIMEOUT_MS = Number(process.env.PISTON_MAX_RUN_TIMEOUT_MS || 3000);
+
+/** Cap compile/run timeouts to what the Piston server allows (default 3000ms). */
+const resolvePistonTimeouts = (options = {}) => {
+  const compile = Number(options.compile_timeout ?? PISTON_MAX_COMPILE_TIMEOUT_MS);
+  const run = Number(options.run_timeout ?? PISTON_MAX_RUN_TIMEOUT_MS);
+  return {
+    compile_timeout: Math.min(
+      Number.isFinite(compile) && compile > 0 ? compile : PISTON_MAX_COMPILE_TIMEOUT_MS,
+      PISTON_MAX_COMPILE_TIMEOUT_MS
+    ),
+    run_timeout: Math.min(
+      Number.isFinite(run) && run > 0 ? run : PISTON_MAX_RUN_TIMEOUT_MS,
+      PISTON_MAX_RUN_TIMEOUT_MS
+    )
+  };
+};
 
 module.exports = {
   getPistonBaseUrl,
   getPistonExecuteUrl,
   getPistonRuntimesUrl,
   isPistonConfigured,
-  PISTON_FETCH_TIMEOUT_MS
+  PISTON_FETCH_TIMEOUT_MS,
+  PISTON_MAX_COMPILE_TIMEOUT_MS,
+  PISTON_MAX_RUN_TIMEOUT_MS,
+  resolvePistonTimeouts
 };
