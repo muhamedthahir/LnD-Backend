@@ -1536,6 +1536,47 @@ class AssessmentUserMapping {
   }
 
   /**
+   * Create a new attempt for every user whose latest mapping is eligible for reattempt.
+   */
+  static async bulkCreateReattempts(administratorId) {
+    const eligibleStatuses = ['IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'DISQUALIFIED'];
+    const [rows] = await pool.execute(
+      `SELECT aum.id, aum.user_id, aum.status
+       FROM assessment_user_mappings aum
+       INNER JOIN (
+         SELECT user_id, MAX(attempt_number) AS max_attempt
+         FROM assessment_user_mappings
+         WHERE assessment_administrator_id = ?
+         GROUP BY user_id
+       ) latest ON aum.user_id = latest.user_id
+         AND aum.attempt_number = latest.max_attempt
+         AND aum.assessment_administrator_id = ?
+       ORDER BY aum.user_id ASC`,
+      [administratorId, administratorId]
+    );
+
+    let created = 0;
+    let skipped = 0;
+    const results = [];
+
+    for (const row of rows) {
+      if (!eligibleStatuses.includes(row.status)) {
+        skipped += 1;
+        continue;
+      }
+      const result = await this.createReattempt(row.id);
+      created += 1;
+      results.push({
+        user_id: row.user_id,
+        mapping_id: result.id,
+        attempt_number: result.attempt_number
+      });
+    }
+
+    return { created, skipped, total: rows.length, results };
+  }
+
+  /**
    * Get total attempts count for a user and administrator
    */
   static async getTotalAttempts(userId, administratorId) {

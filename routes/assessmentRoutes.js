@@ -51,6 +51,7 @@ router.post('/administrators/invite', authenticate, authorize('primary_admin', '
 router.get('/administrators/:administrator_id/users', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getUserMappings);
 router.get('/administrators/:administrator_id/report', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.downloadAssessmentReport);
 router.get('/mappings/:mapping_id/result', authenticate, assessmentController.getAssessmentResult);
+router.post('/administrators/:administrator_id/allow-reattempt-all', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattemptForAll);
 router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattempt);
 router.post('/user-mappings/:mapping_id/refresh-violation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.refreshViolation);
 router.delete('/user-mappings/:mapping_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteUserMapping);

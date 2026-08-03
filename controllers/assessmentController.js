@@ -1519,6 +1519,30 @@ const retakeAssessment = async (req, res) => {
 };
 
 /**
+ * Allow reattempt for all eligible users in a configuration
+ */
+const allowReattemptForAll = async (req, res) => {
+  try {
+    const { administrator_id } = req.params;
+
+    const admin = await AssessmentAdministrator.findById(administrator_id);
+    if (!admin) {
+      return res.status(404).json({ error: 'Configuration not found' });
+    }
+
+    const result = await AssessmentUserMapping.bulkCreateReattempts(administrator_id);
+
+    res.json({
+      message: `Created ${result.created} new attempt(s). ${result.skipped} user(s) skipped.`,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error allowing reattempt for all:', error);
+    res.status(500).json({ error: error.message || 'Failed to refresh attempts for all users' });
+  }
+};
+
+/**
  * Refresh violation count for disqualified user
  */
 const refreshViolation = async (req, res) => {
@@ -3642,6 +3666,7 @@ module.exports = {
   getUserMappings,
   downloadAssessmentReport,
   allowReattempt,
+  allowReattemptForAll,
   retakeAssessment,
   refreshViolation,
   deleteUserMapping,
