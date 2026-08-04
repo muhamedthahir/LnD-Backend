@@ -23,7 +23,11 @@ const {
 const { outputsMatch } = require('../utils/outputCompare');
 const { resolveSegmentQuestionWeight, resolveProgrammingObtainedScore, computeMappingTotalScore } = require('../utils/assessmentScoring');
 const { isAssessmentExpired, isAssessmentNotStartedYet, elapsedSecondsSinceWallClock } = require('../utils/assessmentConfigUtils');
-const { getPistonExecuteUrl, resolvePistonTimeouts } = require('../utils/pistonConfig');
+const {
+  gradeProgrammingSubmissionForAssessment,
+  autoGradeSavedDraftsForMapping,
+  regradeSavedDraftsForAdministrator
+} = require('../services/programmingEvaluationService');
 
 const formatLabel = (value) => {
   if (!value) return '';
@@ -2102,6 +2106,7 @@ const getAssessmentTake = async (req, res) => {
 
     if (autoSubmitOnTimeout && timedOutByElapsed && !hasActivePersistedTime) {
       try {
+        await autoGradeSavedDraftsForMapping(mapping_id, { userId: mapping.user_id });
         const submitResult = await AssessmentUserMapping.submitAssessment(mapping_id);
         return res.json({
           auto_submitted: true,
@@ -2264,11 +2269,16 @@ const submitAssessment = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    const autoGraded = await autoGradeSavedDraftsForMapping(mapping_id, {
+      userId: mapping.user_id
+    });
+
     const result = await AssessmentUserMapping.submitAssessment(mapping_id);
 
     res.json({
       message: 'Assessment submitted successfully',
-      result
+      result,
+      auto_graded: autoGraded
     });
   } catch (error) {
     console.error('Error submitting assessment:', error);
@@ -2956,6 +2966,30 @@ const saveProgress = async (req, res) => {
 };
 
 /**
+ * Regrade saved-but-unsubmitted programming code for all users in a configuration.
+ */
+const regradeSavedCodeForAdministrator = async (req, res) => {
+  try {
+    const { administrator_id } = req.params;
+
+    const admin = await AssessmentAdministrator.findById(administrator_id);
+    if (!admin) {
+      return res.status(404).json({ error: 'Configuration not found' });
+    }
+
+    const summary = await regradeSavedDraftsForAdministrator(administrator_id);
+
+    res.json({
+      message: `Graded ${summary.drafts_graded} saved code submission(s) across ${summary.mappings_processed} user(s).`,
+      ...summary
+    });
+  } catch (error) {
+    console.error('Error regrading saved code:', error);
+    res.status(500).json({ error: error.message || 'Failed to regrade saved code' });
+  }
+};
+
+/**
  * Submit code (programming question submission)
  * Runs all test cases including hidden ones and calculates score
  */
@@ -2977,161 +3011,20 @@ const submitCode = async (req, res) => {
       return res.status(400).json({ error: 'Assessment is not in progress' });
     }
 
-    // Get all test cases for this question (including hidden)
-    const [allTestCases] = await pool.execute(
-      `SELECT id, input, expected_result, is_hidden, weight 
-       FROM test_cases 
-       WHERE programming_question_id = ?
-       ORDER BY \`order\` ASC, id ASC`,
-      [question_id]
+    const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(
+      mapping_id,
+      mapping.current_segment_index
     );
 
-    // Run code against all test cases
-    const pistonEndpoint = getPistonExecuteUrl();
-
-    const languageVersions = {
-      'node': '18.15.0',
-      'javascript': '18.15.0',
-      'python': '3.10.0',
-      'java': '15.0.2',
-      'c': '10.2.0',
-      'cpp': '10.2.0',
-      'c++': '10.2.0'
-    };
-
-    const segment_id = await AssessmentSegmentProgress.getSegmentIdByIndex(mapping_id, mapping.current_segment_index);
-
-    let questionWeight = 1;
-    const [assignRows] = await pool.execute(
-      `SELECT weightage FROM user_question_assignments
-       WHERE assessment_user_mapping_id = ? AND question_type = 'PROGRAMMING' AND question_id = ?
-       LIMIT 1`,
-      [mapping_id, question_id]
-    );
-    if (assignRows[0]?.weightage) {
-      questionWeight = parseFloat(assignRows[0].weightage) || 1;
-    } else if (segment_id) {
-      const [spqRows] = await pool.execute(
-        `SELECT spq.positive_marks, spq.weightage_override, q.points as default_weightage
-         FROM segment_programming_questions spq
-         JOIN programming_questions pq ON spq.programming_question_id = pq.id
-         JOIN questions q ON pq.question_id = q.id
-         WHERE spq.assessment_segment_id = ? AND pq.id = ?`,
-        [segment_id, question_id]
-      );
-      if (spqRows[0]) {
-        questionWeight = resolveSegmentQuestionWeight(spqRows[0]);
-      }
-    }
-
-    const hiddenCases = allTestCases.filter(tc => tc.is_hidden);
-    const scoringCases = hiddenCases.length > 0 ? hiddenCases : allTestCases;
-    const perCaseWeight = scoringCases.length > 0 ? (questionWeight / scoringCases.length) : 0;
-
-    let testCasesPassed = 0;
-    let totalTestCases = allTestCases.length;
-    let totalPoints = 0;
-    let earnedPoints = 0;
-    const testResults = [];
-
-    for (const testCase of allTestCases) {
-      const countsTowardScore = hiddenCases.length > 0 ? testCase.is_hidden : true;
-      const caseWeight = countsTowardScore ? perCaseWeight : 0;
-      if (countsTowardScore) {
-        totalPoints += caseWeight;
-      }
-      
-      try {
-        const pistonPayload = {
-          language: language.toLowerCase(),
-          version: languageVersions[language.toLowerCase()] || '*',
-          files: [{ name: `main.${language === 'python' ? 'py' : language === 'java' ? 'java' : language}`, content: code }],
-          stdin: testCase.input || '',
-          args: [],
-          ...resolvePistonTimeouts()
-        };
-
-        const response = await fetch(pistonEndpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(pistonPayload)
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          const actualOutput = result.run?.stdout || '';
-          const expectedOutput = testCase.expected_result || '';
-          const passed = outputsMatch(actualOutput, expectedOutput);
-
-          if (passed) {
-            testCasesPassed++;
-            if (countsTowardScore) {
-              earnedPoints += caseWeight;
-            }
-          }
-
-          testResults.push({
-            test_case_id: testCase.id,
-            is_hidden: testCase.is_hidden,
-            passed,
-            // Only include details for non-hidden test cases
-            ...(testCase.is_hidden ? {} : {
-              input: testCase.input,
-              expected_result: testCase.expected_result,
-              actual_output: actualOutput
-            })
-          });
-        } else {
-          testResults.push({
-            test_case_id: testCase.id,
-            is_hidden: testCase.is_hidden,
-            passed: false,
-            error: 'Execution failed'
-          });
-        }
-      } catch (execError) {
-        console.error('Test case execution error:', execError);
-        testResults.push({
-          test_case_id: testCase.id,
-          is_hidden: testCase.is_hidden,
-          passed: false,
-          error: execError.message
-        });
-      }
-    }
-
-    const normalizedRatio = totalPoints > 0 ? (earnedPoints / totalPoints) : 0;
-    const percentageScore = Math.round(normalizedRatio * 100);
-
-    const absoluteScore = normalizedRatio * questionWeight;
-
-    const hiddenPassed = testResults.filter(r => r.is_hidden && r.passed).length;
-    const hiddenTotal = testResults.filter(r => r.is_hidden).length;
-
-    const allPassed = totalTestCases > 0 && testCasesPassed === totalTestCases;
-    const submissionStatus = allPassed
-      ? 'completed'
-      : (testCasesPassed > 0 ? 'attempted' : 'error');
-
-    // Save the code submission in programming_submissions table
-    const result = await ProgrammingSubmission.createOrUpdateForAssessment({
-      user_id: req.user.id,
-      assessment_user_mapping_id: mapping_id,
-      assessment_segment_id: segment_id,
-      programming_question_id: question_id,
-      submitted_code: code,
-      language_used: language,
-      status: submissionStatus,
-      test_cases_passed: testCasesPassed,
-      test_cases_total: totalTestCases,
-      score: absoluteScore,
-      max_score: questionWeight,
-      execution_result: testResults,
-      hidden_passed: hiddenPassed,
-      hidden_total: hiddenTotal
+    const evaluation = await gradeProgrammingSubmissionForAssessment({
+      mappingId: mapping_id,
+      userId: req.user.id,
+      programmingQuestionId: question_id,
+      code,
+      language,
+      segmentId: segment_id
     });
 
-    // Accumulate millisecond-precision time spent on this question (client sends a delta).
     const deltaMs = Number(req.body.time_taken_ms);
     if (Number.isFinite(deltaMs) && deltaMs > 0) {
       try {
@@ -3146,38 +3039,26 @@ const submitCode = async (req, res) => {
       }
     }
 
-    // Update segment score from all submissions
-    let segmentScore = null;
-    let mappingScore = null;
-    if (segment_id) {
-      segmentScore = await AssessmentSegmentProgress.updateSegmentScore(mapping_id, segment_id);
-      // Cascade: update mapping total score from all segment scores
-      mappingScore = await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
-    }
-
-    // Update mapping last activity
+    const mappingScore = await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
     await AssessmentUserMapping.updateActivity(mapping_id, {});
 
-    res.json({ 
+    res.json({
       message: 'Code submitted successfully',
-      submission_id: result?.id,
-      test_cases_passed: testCasesPassed,
-      test_cases_total: totalTestCases,
-      score: percentageScore, // Return percentage to UI
-      earned_points: earnedPoints,
-      total_points: totalPoints,
-      segment_score: segmentScore,
+      test_cases_passed: evaluation.testCasesPassed,
+      test_cases_total: evaluation.totalTestCases,
+      score: evaluation.percentageScore,
+      earned_points: evaluation.absoluteScore,
+      total_points: evaluation.questionWeight,
       total_score: mappingScore?.totalScore,
       percentage_score: mappingScore?.percentageScore,
-      // Return visible test case results (not hidden ones' details)
-      results: testResults.filter(r => !r.is_hidden).map(r => ({
+      results: evaluation.testResults.filter((r) => !r.is_hidden).map((r) => ({
         passed: r.passed,
         input: r.input,
         expected_result: r.expected_result,
         actual_output: r.actual_output
       })),
-      hidden_passed: testResults.filter(r => r.is_hidden && r.passed).length,
-      hidden_total: testResults.filter(r => r.is_hidden).length
+      hidden_passed: evaluation.hiddenPassed,
+      hidden_total: evaluation.hiddenTotal
     });
   } catch (error) {
     console.error('Error submitting code:', error);
@@ -3665,6 +3546,7 @@ module.exports = {
   downloadAssessmentReport,
   allowReattempt,
   allowReattemptForAll,
+  regradeSavedCodeForAdministrator,
   retakeAssessment,
   refreshViolation,
   deleteUserMapping,

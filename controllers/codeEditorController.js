@@ -327,6 +327,7 @@ function getFilesForPiston(language, code) {
 
 module.exports = {
   executeCode,
-  getRuntimes
+  getRuntimes,
+  getFilesForPiston
 };
 
