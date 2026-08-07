@@ -290,7 +290,7 @@ const sendOTPEmailWithTemplate = async (email, name, otp, userId = null) => {
       otp: otp,
       OTP: otp,
       email: email,
-      platform_name: process.env.PLATFORM_NAME || 'LnD Platform',
+      platform_name: process.env.PLATFORM_NAME || 'CampusZen',
       validity: '7 days'
     },
     userId
@@ -305,7 +305,7 @@ const sendOTPEmailWithTemplate = async (email, name, otp, userId = null) => {
       subject: 'Welcome! Verify Your Account - OTP',
       htmlBody: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1e3a5f;">Welcome to ${process.env.PLATFORM_NAME || 'LnD Platform'}!</h2>
+          <h2 style="color: #1e3a5f;">Welcome to ${process.env.PLATFORM_NAME || 'CampusZen'}!</h2>
           <p>Hello ${name},</p>
           <p>Your account has been created. Please use the following OTP to set your password:</p>
           <div style="background: #f5f7fa; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
@@ -318,7 +318,7 @@ const sendOTPEmailWithTemplate = async (email, name, otp, userId = null) => {
           <p style="color: #718096; font-size: 12px;">This is an automated message. Please do not reply.</p>
         </div>
       `,
-      textBody: `Welcome to ${process.env.PLATFORM_NAME || 'LnD Platform'}!\n\nHello ${name},\n\nYour OTP is: ${otp}\n\nThis OTP is valid for 7 days.\n\nPlease enter this OTP in the password field during your first login to set your password.`,
+      textBody: `Welcome to ${process.env.PLATFORM_NAME || 'CampusZen'}!\n\nHello ${name},\n\nYour OTP is: ${otp}\n\nThis OTP is valid for 7 days.\n\nPlease enter this OTP in the password field during your first login to set your password.`,
       userId
     });
   }
@@ -396,7 +396,7 @@ const getSESStatus = () => ({
   configured: isSESConfigured(),
   region: process.env.AWS_SES_REGION || process.env.AWS_REGION || 'us-east-1',
   defaultFrom: process.env.SES_DEFAULT_FROM || process.env.EMAIL_FROM || 'noreply@campuszen.in',
-  platformName: process.env.PLATFORM_NAME || 'LnD Platform'
+  platformName: process.env.PLATFORM_NAME || 'CampusZen'
 });
 
 module.exports = {
