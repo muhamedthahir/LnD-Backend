@@ -105,6 +105,52 @@ class Course {
     }
   }
 
+  static async getStatusStats(filters = {}) {
+    let query = `
+      SELECT c.status, COUNT(*) as count
+      FROM courses c
+      LEFT JOIN users u ON c.created_by = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (filters.college_name) {
+      query += ' AND u.college_name = ?';
+      params.push(filters.college_name);
+    }
+
+    query += ' GROUP BY c.status';
+
+    try {
+      const [rows] = await pool.execute(query, params);
+      const stats = { total: 0, published: 0, draft: 0, inProgress: 0 };
+      for (const row of rows) {
+        const count = Number(row.count) || 0;
+        stats.total += count;
+        if (row.status === 'published') stats.published += count;
+        else if (row.status === 'draft') stats.draft += count;
+        else if (row.status === 'in_progress') stats.inProgress += count;
+      }
+      return stats;
+    } catch (error) {
+      if (error.code === 'ER_BAD_FIELD_ERROR') {
+        const [rows] = await pool.execute(
+          'SELECT status, COUNT(*) as count FROM courses GROUP BY status'
+        );
+        const stats = { total: 0, published: 0, draft: 0, inProgress: 0 };
+        for (const row of rows) {
+          const count = Number(row.count) || 0;
+          stats.total += count;
+          if (row.status === 'published') stats.published += count;
+          else if (row.status === 'draft') stats.draft += count;
+          else if (row.status === 'in_progress') stats.inProgress += count;
+        }
+        return stats;
+      }
+      throw error;
+    }
+  }
+
   static async getCount(filters = {}) {
     let query = 'SELECT COUNT(*) as count FROM courses c LEFT JOIN users u ON c.created_by = u.id WHERE 1=1';
     const params = [];

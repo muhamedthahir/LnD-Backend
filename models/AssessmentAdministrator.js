@@ -308,16 +308,28 @@ class AssessmentAdministrator {
       const AssessmentUserMapping = require('./AssessmentUserMapping');
       const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
       const segmentQuestions = {};
-      
-      for (const segment of segments) {
+
+      if (segments.length > 0) {
+        const segmentIds = segments.map((s) => s.id);
+        const placeholders = segmentIds.map(() => '?').join(',');
         const [criteriaRows] = await pool.execute(
-          'SELECT * FROM random_fetch_criteria WHERE assessment_segment_id = ? AND is_active = TRUE',
-          [segment.id]
+          `SELECT * FROM random_fetch_criteria
+           WHERE assessment_segment_id IN (${placeholders}) AND is_active = TRUE`,
+          segmentIds
         );
-        
-        if (criteriaRows.length > 0) {
-          // Aggregate criteria (in case there are multiple for different question types)
-          const aggregated = criteriaRows.reduce((acc, c) => {
+        const criteriaBySegment = {};
+        for (const row of criteriaRows) {
+          if (!criteriaBySegment[row.assessment_segment_id]) {
+            criteriaBySegment[row.assessment_segment_id] = [];
+          }
+          criteriaBySegment[row.assessment_segment_id].push(row);
+        }
+
+        for (const segment of segments) {
+          const segmentCriteria = criteriaBySegment[segment.id] || [];
+          if (segmentCriteria.length === 0) continue;
+
+          const aggregated = segmentCriteria.reduce((acc, c) => {
             acc.total = (acc.total || 0) + (c.total_questions || 0);
             acc.easy = (acc.easy || 0) + (c.easy_count || 0);
             acc.medium = (acc.medium || 0) + (c.medium_count || 0);
@@ -330,7 +342,7 @@ class AssessmentAdministrator {
             }
             return acc;
           }, { total: 0, easy: 0, medium: 0, hard: 0, question_bank_id: null, question_type: null });
-          
+
           segmentQuestions[segment.id] = {
             ...aggregated,
             question_type: AssessmentUserMapping.resolveQuestionType(
@@ -345,7 +357,6 @@ class AssessmentAdministrator {
         }
       }
       
-      // Add segment_questions to question_config
       if (admin.question_config) {
         admin.question_config.segment_questions = segmentQuestions;
       }

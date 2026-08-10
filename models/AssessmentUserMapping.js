@@ -241,8 +241,22 @@ class AssessmentUserMapping {
     }
 
     if (status) {
-      query += ' AND aum.status = ?';
-      params.push(status);
+      if (status === 'completed') {
+        query += ' AND aum.status IN (?, ?, ?)';
+        params.push('COMPLETED', 'SUBMITTED', 'DISQUALIFIED');
+      } else if (status === 'pending') {
+        query += ' AND aum.status = ?';
+        params.push('NOT_STARTED');
+      } else if (status === 'inprogress') {
+        query += ' AND aum.status = ?';
+        params.push('IN_PROGRESS');
+      } else if (status === 'disqualified') {
+        query += ' AND aum.status = ?';
+        params.push('DISQUALIFIED');
+      } else {
+        query += ' AND aum.status = ?';
+        params.push(status);
+      }
     }
 
     // Get total count

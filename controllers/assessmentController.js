@@ -22,6 +22,7 @@ const {
 } = require('../models/AssessmentConfigs');
 const { outputsMatch } = require('../utils/outputCompare');
 const { resolveSegmentQuestionWeight, resolveProgrammingObtainedScore, computeMappingTotalScore } = require('../utils/assessmentScoring');
+const { loadQuestionsForSegmentTake } = require('../utils/assessmentTakeLoader');
 const { isAssessmentExpired, isAssessmentNotStartedYet, elapsedSecondsSinceWallClock } = require('../utils/assessmentConfigUtils');
 const {
   gradeProgrammingSubmissionForAssessment,
@@ -795,17 +796,6 @@ const getUserMappings = async (req, res) => {
       page: parseInt(page),
       pageSize: parseInt(pageSize)
     });
-
-    const mappings = result.mappings || result.data || [];
-    for (const mapping of mappings) {
-      if (['IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'DISQUALIFIED'].includes(mapping.status)) {
-        await AssessmentUserMapping.syncAssignmentWeightages(mapping.id);
-        const score = await AssessmentSegmentProgress.updateMappingTotalScore(mapping.id);
-        mapping.total_score = score.totalScore;
-        mapping.percentage_score = score.percentageScore;
-        mapping.max_possible_score = score.maxPossibleScore;
-      }
-    }
 
     res.json(result);
   } catch (error) {
@@ -1857,8 +1847,6 @@ const getAssessmentTake = async (req, res) => {
       return res.status(400).json({ error: `Assessment cannot be taken. Current status: ${mapping.status}` });
     }
 
-    await AssessmentUserMapping.syncAssignmentWeightages(mapping_id);
-
     // If not in progress, start it first
     if (mapping.status !== 'IN_PROGRESS') {
       try {
@@ -1887,12 +1875,8 @@ const getAssessmentTake = async (req, res) => {
       return res.status(404).json({ error: 'Administrator not found' });
     }
 
-    // Get question config to check if random fetch is enabled
-    const [questionConfigRows] = await pool.execute(
-      'SELECT * FROM question_configs WHERE assessment_administrator_id = ?',
-      [mapping.assessment_administrator_id]
-    );
-    const config = questionConfigRows[0] || {};
+    // Get question config (already loaded on admin)
+    const config = admin.question_config || {};
 
     // Get segments
     const segments = await AssessmentSegment.getByAssessmentId(admin.assessment_id);
@@ -2044,86 +2028,14 @@ const getAssessmentTake = async (req, res) => {
       }
     }
 
-    // Get full question details for each assigned question
-    const questions = [];
-    for (const assignment of questionAssignments) {
-      if (assignment.question_type === 'PROGRAMMING') {
-        const [pqRows] = await pool.execute(
-          `SELECT pq.*, q.name, q.description, q.points,
-                  COALESCE(spq.positive_marks, q.points) as positive_marks,
-                  COALESCE(spq.negative_marks, 0) as negative_marks,
-                  COALESCE(spq.neutral_marks, 0) as neutral_marks
-           FROM programming_questions pq
-           JOIN questions q ON pq.question_id = q.id
-           LEFT JOIN segment_programming_questions spq ON spq.programming_question_id = pq.id AND spq.assessment_segment_id = ?
-           WHERE pq.id = ?`,
-          [currentSegment.id, assignment.question_id]
-        );
-        if (pqRows[0]) {
-          // Fetch test cases for this programming question (only non-hidden for display)
-          const [testCaseRows] = await pool.execute(
-            `SELECT id, input, expected_result, description, is_hidden, weight
-             FROM test_cases 
-             WHERE programming_question_id = ? AND is_hidden = 0
-             ORDER BY \`order\` ASC, id ASC`,
-            [pqRows[0].id]
-          );
-
-          questions.push(await buildProgrammingQuestionForTake(
-            pqRows[0],
-            assignment,
-            currentSegment,
-            testCaseRows
-          ));
-        }
-      } else if (assignment.question_type === 'MCQ') {
-        const [mqRows] = await pool.execute(
-          `SELECT mq.*, q.name, q.description, q.points,
-                  COALESCE(smq.positive_marks, q.points) as positive_marks,
-                  COALESCE(smq.negative_marks, 0) as negative_marks,
-                  COALESCE(smq.neutral_marks, 0) as neutral_marks
-           FROM mcq_multiselect_questions mq
-           JOIN questions q ON mq.question_id = q.id
-           LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id AND smq.assessment_segment_id = ?
-           WHERE mq.id = ?`,
-          [currentSegment.id, assignment.question_id]
-        );
-        if (mqRows[0]) {
-          // Fetch options for this MCQ
-          const [optionRows] = await pool.execute(
-            `SELECT id, text as option_text, \`order\` FROM options WHERE mcq_multiselect_question_id = ? ORDER BY \`order\` ASC`,
-            [mqRows[0].id]
-          );
-
-          let mcqOptions = optionRows.map(opt => ({
-            id: opt.id,
-            value: opt.id,
-            text: opt.option_text
-          }));
-          // Hardening: shuffle option order per candidate so a shared screen/answer key
-          // (e.g. "the answer is option B") isn't reusable across students.
-          if (config.shuffle_options_in_mcq) {
-            mcqOptions = seededShuffle(mcqOptions, `${mapping_id}-${mqRows[0].id}`);
-          }
-
-          questions.push({
-            ...mqRows[0],
-            question_type: 'MCQ',
-            mcq_question_id: mqRows[0].id,
-            question_text: mqRows[0].name || mqRows[0].description,
-            sequence_order: assignment.sequence_order,
-            weightage: assignment.weightage,
-            positive_marks: mqRows[0].positive_marks || mqRows[0].points || 0,
-            negative_marks: mqRows[0].negative_marks || 0,
-            neutral_marks: mqRows[0].neutral_marks || 0,
-            options: mcqOptions
-          });
-        }
-      }
-    }
-
-    // Get saved answers
-    const savedAnswers = questionAssignments; // Use the same query result
+    // Get full question details for each assigned question (batched)
+    const questions = await loadQuestionsForSegmentTake({
+      segmentId: currentSegment.id,
+      mappingId: mapping_id,
+      questionAssignments,
+      shuffleOptionsInMcq: !!config.shuffle_options_in_mcq,
+      seededShuffleFn: seededShuffle
+    });
 
     // Calculate time remaining (use IST wall-clock start + persisted timer for active attempts)
     const totalDuration = admin.timing_config?.total_time || 0;
@@ -2420,9 +2332,6 @@ const getAssessmentResult = async (req, res) => {
     if (mapping.user_id !== req.user.id && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });
     }
-
-    await AssessmentUserMapping.syncAssignmentWeightages(mapping_id);
-    await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
 
     // Get scoring config to check if results should be shown
     const scoringConfig = await ScoringConfig.findByAdminId(mapping.assessment_administrator_id);
@@ -3292,9 +3201,6 @@ const switchSegment = async (req, res) => {
       segmentTimeRemaining = targetSegment.segment_duration || 0;
     }
 
-    await AssessmentUserMapping.syncAssignmentWeightages(mapping_id);
-    await AssessmentSegmentProgress.updateMappingTotalScore(mapping_id);
-
     res.json({
       segment_index,
       segment: targetSegment,
@@ -3379,10 +3285,7 @@ const seededShuffle = (array, seedStr) => {
 // Helper function to get segment questions
 const getSegmentQuestions = async (segmentId, mappingId) => {
   const assignments = await UserQuestionAssignment.getByMappingAndSegment(mappingId, segmentId);
-  const segment = await AssessmentSegment.findById(segmentId);
-  const questions = [];
 
-  // Load whether MCQ options should be shuffled for this assessment
   let shuffleOptionsInMcq = false;
   try {
     const [cfgRows] = await pool.execute(
@@ -3397,77 +3300,13 @@ const getSegmentQuestions = async (segmentId, mappingId) => {
     shuffleOptionsInMcq = false;
   }
 
-  for (const assignment of assignments) {
-    if (assignment.question_type === 'PROGRAMMING') {
-      const [pqRows] = await pool.execute(
-        `SELECT pq.*, q.name, q.description, q.points
-         FROM programming_questions pq
-         JOIN questions q ON pq.question_id = q.id
-         WHERE pq.id = ?`,
-        [assignment.question_id]
-      );
-
-      if (pqRows[0]) {
-        const [testCaseRows] = await pool.execute(
-          `SELECT id, input, expected_result, description, is_hidden, weight
-           FROM test_cases
-           WHERE programming_question_id = ? AND is_hidden = 0
-           ORDER BY \`order\` ASC, id ASC`,
-          [pqRows[0].id]
-        );
-
-        questions.push(await buildProgrammingQuestionForTake(
-          pqRows[0],
-          assignment,
-          segment,
-          testCaseRows
-        ));
-      }
-    } else if (assignment.question_type === 'MCQ') {
-      const [mqRows] = await pool.execute(
-        `SELECT mq.*, q.name, q.description, q.points,
-                COALESCE(smq.positive_marks, q.points) as positive_marks,
-                COALESCE(smq.negative_marks, 0) as negative_marks,
-                COALESCE(smq.neutral_marks, 0) as neutral_marks
-         FROM mcq_multiselect_questions mq
-         JOIN questions q ON mq.question_id = q.id
-         LEFT JOIN segment_mcq_questions smq ON smq.mcq_question_id = mq.id AND smq.assessment_segment_id = ?
-         WHERE mq.id = ?`,
-        [segmentId, assignment.question_id]
-      );
-
-      if (mqRows[0]) {
-        const [optionRows] = await pool.execute(
-          `SELECT id, text as option_text, \`order\`
-           FROM options
-           WHERE mcq_multiselect_question_id = ?
-           ORDER BY \`order\` ASC`,
-          [mqRows[0].id]
-        );
-
-        let mcqOptions = optionRows.map(opt => ({
-          id: opt.id,
-          value: opt.id,
-          text: opt.option_text
-        }));
-        if (shuffleOptionsInMcq) {
-          mcqOptions = seededShuffle(mcqOptions, `${mappingId}-${mqRows[0].id}`);
-        }
-
-        questions.push({
-          ...mqRows[0],
-          question_type: 'MCQ',
-          mcq_question_id: mqRows[0].id,
-          question_text: mqRows[0].name || mqRows[0].description,
-          sequence_order: assignment.sequence_order,
-          weightage: assignment.weightage,
-          options: mcqOptions
-        });
-      }
-    }
-  }
-
-  return questions;
+  return loadQuestionsForSegmentTake({
+    segmentId,
+    mappingId,
+    questionAssignments: assignments,
+    shuffleOptionsInMcq,
+    seededShuffleFn: seededShuffle
+  });
 };
 
 // =====================================================

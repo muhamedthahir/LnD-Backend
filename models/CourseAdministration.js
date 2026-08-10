@@ -121,6 +121,50 @@ class CourseAdministration {
    * @param {Object} options - { limit, offset, filters }
    * @returns {Promise<Object>} { administrations, total }
    */
+  static async getStatusStats(filters = {}) {
+    try {
+      let query = `
+        SELECT a.status, COUNT(DISTINCT a.id) as count
+        FROM course_administrations a
+        LEFT JOIN enrollments e2 ON e2.administration_id = a.id AND e2.student_id IS NOT NULL
+        LEFT JOIN users u2 ON e2.student_id = u2.id
+        WHERE 1=1
+      `;
+      const params = [];
+
+      if (filters.college) {
+        query += ' AND (a.college = ? OR u2.college_name = ?)';
+        params.push(filters.college, filters.college);
+      }
+
+      query += ' GROUP BY a.status';
+
+      const [rows] = await executeWithRetry(query, params);
+      const stats = { total: 0, published: 0, draft: 0 };
+      for (const row of rows) {
+        const count = Number(row.count) || 0;
+        stats.total += count;
+        if (row.status === 'published') stats.published += count;
+        else if (row.status === 'draft') stats.draft += count;
+      }
+      return stats;
+    } catch (error) {
+      if (error.code === 'ER_NO_SUCH_TABLE') {
+        return { total: 0, published: 0, draft: 0 };
+      }
+      throw error;
+    }
+  }
+
+  static async getRecentSummary(limit = 5, filters = {}) {
+    const result = await this.getAll({
+      limit,
+      offset: 0,
+      filters: filters.college ? { college: filters.college } : {}
+    });
+    return result.administrations || [];
+  }
+
   static async getAll(options = {}) {
     const { limit = 50, offset = 0, filters = {} } = options;
     

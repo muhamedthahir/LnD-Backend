@@ -109,7 +109,12 @@ async function resolveMcqAssignmentScore(mapping_id, assignmentQuestionId, mcqBy
   return Number(subRows[0]?.best_score) || 0;
 }
 
-async function resolveProgrammingAssignmentScore(mapping_id, questionId, weight) {
+async function resolveProgrammingAssignmentScore(mapping_id, questionId, weight, progByQuestion) {
+  if (progByQuestion) {
+    const sub = progByQuestion[questionId];
+    if (!sub) return 0;
+    return resolveProgrammingObtainedScore(sub.best_score, weight, sub.max_score);
+  }
   const [subRows] = await pool.execute(
     `SELECT best_score, max_score FROM programming_submissions
      WHERE assessment_user_mapping_id = ? AND programming_question_id = ?
@@ -119,6 +124,50 @@ async function resolveProgrammingAssignmentScore(mapping_id, questionId, weight)
   );
   if (!subRows[0]) return 0;
   return resolveProgrammingObtainedScore(subRows[0].best_score, weight, subRows[0].max_score);
+}
+
+async function buildProgrammingScoreByQuestion(mapping_id) {
+  const [rows] = await pool.execute(
+    `SELECT programming_question_id, best_score, max_score
+     FROM programming_submissions
+     WHERE assessment_user_mapping_id = ?
+     ORDER BY best_score DESC, id DESC`,
+    [mapping_id]
+  );
+  const map = {};
+  for (const row of rows) {
+    if (!map[row.programming_question_id]) {
+      map[row.programming_question_id] = row;
+    }
+  }
+  return map;
+}
+
+async function buildMcqScoreLookup(mapping_id, mcqByOwner) {
+  const [rows] = await pool.execute(
+    `SELECT mcq_question_id, best_score FROM mcq_submissions
+     WHERE assessment_user_mapping_id = ?`,
+    [mapping_id]
+  );
+  const byQuestionId = {};
+  for (const row of rows) {
+    const score = Number(row.best_score) || 0;
+    if (!byQuestionId[row.mcq_question_id] || score > byQuestionId[row.mcq_question_id]) {
+      byQuestionId[row.mcq_question_id] = score;
+    }
+  }
+  return { mcqByOwner, byQuestionId };
+}
+
+async function resolveMcqAssignmentScoreFast(assignmentQuestionId, mcqByOwner, mcqByQuestionId) {
+  const owned = mcqByOwner[assignmentQuestionId];
+  if (owned) {
+    return Number(owned.best_score) || 0;
+  }
+  if (mcqByQuestionId[assignmentQuestionId] !== undefined) {
+    return mcqByQuestionId[assignmentQuestionId];
+  }
+  return 0;
 }
 
 /**
@@ -133,6 +182,8 @@ async function computeMappingTotalScore(mapping_id) {
   );
 
   const mcqByOwner = await buildMcqScoreByOwner(mapping_id);
+  const progByQuestion = await buildProgrammingScoreByQuestion(mapping_id);
+  const { byQuestionId: mcqByQuestionId } = await buildMcqScoreLookup(mapping_id, mcqByOwner);
 
   let totalObtained = 0;
   let maxPossible = 0;
@@ -142,9 +193,9 @@ async function computeMappingTotalScore(mapping_id) {
     maxPossible += weight;
 
     if (a.question_type === 'PROGRAMMING') {
-      totalObtained += await resolveProgrammingAssignmentScore(mapping_id, a.question_id, weight);
+      totalObtained += await resolveProgrammingAssignmentScore(mapping_id, a.question_id, weight, progByQuestion);
     } else {
-      totalObtained += await resolveMcqAssignmentScore(mapping_id, a.question_id, mcqByOwner);
+      totalObtained += await resolveMcqAssignmentScoreFast(a.question_id, mcqByOwner, mcqByQuestionId);
     }
   }
 

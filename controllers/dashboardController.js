@@ -1,5 +1,6 @@
 const Enrollment = require('../models/Enrollment');
 const Course = require('../models/Course');
+const CourseAdministration = require('../models/CourseAdministration');
 
 class DashboardController {
   static async getStudentDashboard(req, res) {
@@ -48,7 +49,31 @@ class DashboardController {
       res.status(500).json({ error: 'Internal server error' });
     }
   }
+
+  static async getAdminStats(req, res) {
+    try {
+      const filters = {};
+      if (req.user.role === 'college_admin' && req.user.college_name) {
+        filters.college_name = req.user.college_name;
+        filters.college = req.user.college_name;
+      }
+
+      const [courseStats, adminStats, recentAdministrations] = await Promise.all([
+        Course.getStatusStats(filters),
+        CourseAdministration.getStatusStats(filters),
+        CourseAdministration.getRecentSummary(5, filters)
+      ]);
+
+      res.json({
+        courseStats,
+        adminStats,
+        recentAdministrations
+      });
+    } catch (error) {
+      console.error('Get admin stats error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = DashboardController;
-

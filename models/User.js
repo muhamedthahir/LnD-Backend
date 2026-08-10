@@ -397,12 +397,10 @@ class User {
       }
       
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      
-      console.log('getAllPaginated conditions:', { search, college, excludePrimaryAdmin, excludeCurrentUser });
-      console.log('getAllPaginated whereClause:', whereClause);
-      console.log('getAllPaginated params:', params);
-      
-      // Get total count
+
+      const limitInt = Math.max(1, Math.min(1000, parseInt(limit, 10) || 10));
+      const offsetInt = Math.max(0, parseInt(offset, 10) || 0);
+
       const countQuery = `SELECT COUNT(*) as total FROM users${whereClause ? ' ' + whereClause : ''}`;
       let countRows;
       try {
@@ -413,21 +411,12 @@ class User {
         }
       } catch (countError) {
         console.error('Error in count query:', countError);
-        console.error('Count query:', countQuery);
-        console.error('Count params:', params);
         throw countError;
       }
       const total = countRows[0].total;
-      
-      // Get paginated results
-      const limitInt = Math.max(1, Math.min(1000, parseInt(limit, 10) || 10));
-      const offsetInt = Math.max(0, parseInt(offset, 10) || 0);
-      
-      // Build query - LIMIT and OFFSET cannot be parameterized in MySQL, so use template literals
-      // This is safe because limitInt and offsetInt are validated integers
-      const selectQuery = `SELECT *, password_set, password FROM users${whereClause ? ' ' + whereClause : ''} ORDER BY created_at DESC LIMIT ${limitInt} OFFSET ${offsetInt}`;
-      console.log('getAllPaginated SELECT SQL:', selectQuery);
-      console.log('getAllPaginated SELECT params:', params);
+
+      const selectQuery = `SELECT id, name, email, role, college_name, roll_number, department, section, degree, password_set, created_at
+        FROM users${whereClause ? ' ' + whereClause : ''} ORDER BY created_at DESC LIMIT ${limitInt} OFFSET ${offsetInt}`;
       
       let rows;
       try {
@@ -438,15 +427,11 @@ class User {
         }
       } catch (selectError) {
         console.error('Error in select query:', selectError);
-        console.error('Select query:', selectQuery);
-        console.error('Select params:', params);
         throw selectError;
       }
       
-      // Ensure all expected fields exist and calculate status
       const users = rows.map(row => {
-        // Check password_set for all users, not just students
-        const status = (row.password_set === true || row.password_set === 1 || row.password) ? 'activated' : 'pending';
+        const status = (row.password_set === true || row.password_set === 1) ? 'activated' : 'pending';
         
         return {
           id: row.id,
