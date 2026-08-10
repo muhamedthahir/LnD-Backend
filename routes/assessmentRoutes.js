@@ -55,6 +55,7 @@ router.post('/administrators/:administrator_id/allow-reattempt-all', authenticat
 router.post('/administrators/:administrator_id/regrade-saved-code', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.regradeSavedCodeForAdministrator);
 router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattempt);
 router.post('/user-mappings/:mapping_id/refresh-violation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.refreshViolation);
+router.post('/user-mappings/:mapping_id/extend-time', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.extendTime);
 router.delete('/user-mappings/:mapping_id', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.deleteUserMapping);
 router.post('/user-mappings/:mapping_id/send-invitation', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.sendInvitation);
 

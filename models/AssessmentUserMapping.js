@@ -1454,6 +1454,65 @@ class AssessmentUserMapping {
   }
 
   /**
+   * Extend remaining time for an in-progress attempt (admin).
+   * Respects timing_mode: OVERALL, SEGMENT_WISE, or BOTH.
+   */
+  static async extendTime(id, extraSeconds, timingMode = 'OVERALL') {
+    const mapping = await this.findById(id);
+    if (!mapping) throw new Error('Mapping not found');
+    if (mapping.status !== 'IN_PROGRESS') {
+      throw new Error('Can only extend time for in-progress attempts');
+    }
+
+    const seconds = Math.max(0, Number(extraSeconds) || 0);
+    if (seconds <= 0) throw new Error('Extension must be a positive number of seconds');
+
+    const extendOverall = timingMode === 'OVERALL' || timingMode === 'BOTH';
+    const extendSegment = timingMode === 'SEGMENT_WISE' || timingMode === 'BOTH';
+
+    if (extendOverall) {
+      await pool.execute(
+        `UPDATE assessment_user_mappings
+         SET time_remaining = COALESCE(time_remaining, 0) + ?
+         WHERE id = ?`,
+        [seconds, id]
+      );
+    }
+
+    if (extendSegment) {
+      await pool.execute(
+        `UPDATE assessment_user_mappings
+         SET segment_time_remaining = COALESCE(segment_time_remaining, 0) + ?
+         WHERE id = ?`,
+        [seconds, id]
+      );
+
+      const [segRows] = await pool.execute(
+        `SELECT aseg.id
+         FROM assessment_segments aseg
+         JOIN assessment_administrators aa ON aa.assessment_id = aseg.assessment_id
+         JOIN assessment_user_mappings aum ON aum.assessment_administrator_id = aa.id
+         WHERE aum.id = ?
+         ORDER BY aseg.sequence_order ASC`,
+        [id]
+      );
+      const segIndex = mapping.current_segment_index || 0;
+      const currentSeg = segRows[segIndex];
+      if (currentSeg) {
+        await pool.execute(
+          `UPDATE assessment_segment_progress
+           SET time_remaining = COALESCE(time_remaining, 0) + ?,
+               time_allocated = COALESCE(time_allocated, 0) + ?
+           WHERE assessment_user_mapping_id = ? AND assessment_segment_id = ?`,
+          [seconds, seconds, id, currentSeg.id]
+        );
+      }
+    }
+
+    return this.findById(id);
+  }
+
+  /**
    * Refresh violation count (allow disqualified user to continue)
    */
   static async refreshViolation(mappingId) {

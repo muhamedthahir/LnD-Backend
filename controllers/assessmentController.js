@@ -798,7 +798,7 @@ const getUserMappings = async (req, res) => {
 
     const mappings = result.mappings || result.data || [];
     for (const mapping of mappings) {
-      if (['IN_PROGRESS', 'COMPLETED', 'SUBMITTED'].includes(mapping.status)) {
+      if (['IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'DISQUALIFIED'].includes(mapping.status)) {
         await AssessmentUserMapping.syncAssignmentWeightages(mapping.id);
         const score = await AssessmentSegmentProgress.updateMappingTotalScore(mapping.id);
         mapping.total_score = score.totalScore;
@@ -1544,6 +1544,55 @@ const allowReattemptForAll = async (req, res) => {
   } catch (error) {
     console.error('Error allowing reattempt for all:', error);
     res.status(500).json({ error: error.message || 'Failed to refresh attempts for all users' });
+  }
+};
+
+/**
+ * Extend remaining time for an in-progress user mapping (admin)
+ */
+const extendTime = async (req, res) => {
+  try {
+    const { mapping_id } = req.params;
+    const minutes = Number(req.body.minutes);
+
+    if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 180) {
+      return res.status(400).json({ error: 'Minutes must be between 1 and 180' });
+    }
+
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) {
+      return res.status(404).json({ error: 'Mapping not found' });
+    }
+
+    if (mapping.status !== 'IN_PROGRESS') {
+      return res.status(400).json({
+        error: `Can only extend time for in-progress attempts. Current status: ${mapping.status}`
+      });
+    }
+
+    const admin = await AssessmentAdministrator.findById(mapping.assessment_administrator_id);
+    const timingMode = admin?.timing_config?.timing_mode || 'OVERALL';
+    const extraSeconds = Math.round(minutes * 60);
+
+    const updated = await AssessmentUserMapping.extendTime(mapping_id, extraSeconds, timingMode);
+
+    const scopeLabel = timingMode === 'SEGMENT_WISE'
+      ? 'segment'
+      : timingMode === 'BOTH'
+        ? 'overall and segment'
+        : 'overall';
+
+    res.json({
+      message: `Added ${minutes} minute(s) to ${scopeLabel} timer`,
+      mapping_id: updated.id,
+      timing_mode: timingMode,
+      extended_minutes: minutes,
+      time_remaining: updated.time_remaining,
+      segment_time_remaining: updated.segment_time_remaining
+    });
+  } catch (error) {
+    console.error('Error extending time:', error);
+    res.status(500).json({ error: error.message || 'Failed to extend time' });
   }
 };
 
@@ -3549,6 +3598,7 @@ module.exports = {
   regradeSavedCodeForAdministrator,
   retakeAssessment,
   refreshViolation,
+  extendTime,
   deleteUserMapping,
   sendInvitation,
   getMyAssessments,
