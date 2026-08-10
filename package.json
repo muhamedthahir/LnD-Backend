@@ -13,6 +13,7 @@
     "migrate": "node scripts/runMigration.js",
     "check-db": "node scripts/checkDatabase.js",
     "reset-password": "node scripts/resetUserPassword.js",
+    "reset-mbu-passwords": "node scripts/resetMbuStudentPasswords.js",
     "create-and-migrate": "node scripts/createAndMigrateTables.js",
     "create-missing-tables": "node scripts/createMissingTables.js",
     "reset-db": "node scripts/resetDatabaseWithUsers.js",
