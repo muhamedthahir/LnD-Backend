@@ -15,7 +15,7 @@ async function batchLoadLanguages(programmingQuestionIds) {
   if (!programmingQuestionIds.length) return {};
   const placeholders = programmingQuestionIds.map(() => '?').join(',');
   const [rows] = await pool.execute(
-    `SELECT pql.programming_question_id, l.id, l.name, l.key, l.version, l.is_active
+    `SELECT pql.programming_question_id, l.*
      FROM languages l
      INNER JOIN programming_question_languages pql ON l.id = pql.language_id
      WHERE pql.programming_question_id IN (${placeholders})`,

@@ -2179,7 +2179,10 @@ const getAssessmentTake = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching assessment take data:', error);
-    res.status(500).json({ error: 'Failed to fetch assessment data' });
+    res.status(500).json({
+      error: 'Failed to fetch assessment data',
+      details: error.message
+    });
   }
 };
 
