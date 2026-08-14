@@ -6,7 +6,8 @@ const {
   isPistonConfigured,
   getPistonBaseUrl,
   PISTON_FETCH_TIMEOUT_MS,
-  resolvePistonTimeouts
+  resolvePistonTimeouts,
+  resolvePistonRuntime
 } = require('../utils/pistonConfig');
 
 const fetchPiston = async (url, options = {}) => {
@@ -40,36 +41,12 @@ const executeCode = async (req, res) => {
     }
 
     const pistonEndpoint = getPistonExecuteUrl();
+    const runtime = await resolvePistonRuntime(language, version);
+    const files = getFilesForPiston(runtime.language, code);
 
-    // Use language as-is (no conversion)
-    const pistonLanguage = language.toLowerCase();
-
-    // Language version mapping (default versions for common languages)
-    const languageVersions = {
-      'node': version || '18.15.0',
-      'javascript': version || '18.15.0',
-      'python': version || '3.10.0',
-      'java': version || '15.0.2',
-      'c': version || '10.2.0',
-      'cpp': version || '10.2.0',
-      'c++': version || '10.2.0',
-      'typescript': version || '5.0.3',
-      'go': version || '1.16.2',
-      'rust': version || '1.68.2',
-      'ruby': version || '3.0.1',
-      'php': version || '8.2.3',
-      'csharp': version || '6.12.0',
-      'swift': version || '5.3.3',
-      'kotlin': version || '1.8.20'
-    };
-
-    // Prepare the request payload for Piston API
-    // For Java, this will split multiple classes into separate files
-    const files = getFilesForPiston(language, code);
-    
     const pistonPayload = {
-      language: pistonLanguage,
-      version: languageVersions[pistonLanguage] || languageVersions[language.toLowerCase()] || version || '*',
+      language: runtime.language,
+      version: runtime.version,
       files: files,
       stdin: stdin,
       args: [],
@@ -288,7 +265,8 @@ function splitJavaIntoFiles(code) {
 function getFileName(language) {
   const fileExtensions = {
     'javascript': 'solution.js',
-    'python': 'solution.py',
+    'python': 'main.py',
+    'python3': 'main.py',
     'java': 'Solution.java',
     'c': 'solution.c',
     'cpp': 'solution.cpp',

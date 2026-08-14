@@ -2233,9 +2233,14 @@ const submitAssessment = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const autoGraded = await autoGradeSavedDraftsForMapping(mapping_id, {
-      userId: mapping.user_id
-    });
+    let autoGraded = { graded: [], errors: [], skipped: 0 };
+    try {
+      autoGraded = await autoGradeSavedDraftsForMapping(mapping_id, {
+        userId: mapping.user_id
+      });
+    } catch (gradeError) {
+      console.error('Auto-grade on submit failed, continuing with existing scores:', gradeError);
+    }
 
     const result = await AssessmentUserMapping.submitAssessment(mapping_id);
 

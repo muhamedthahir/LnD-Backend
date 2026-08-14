@@ -1034,8 +1034,8 @@ class AssessmentUserMapping {
     const mapping = await this.findById(id);
     if (!mapping) throw new Error('Mapping not found');
 
-    if (mapping.status === 'COMPLETED') {
-      throw new Error('Assessment already submitted');
+    if (mapping.status === 'COMPLETED' || mapping.status === 'SUBMITTED') {
+      return this.findById(id);
     }
 
     // Calculate scores from assigned questions (best submission per question).

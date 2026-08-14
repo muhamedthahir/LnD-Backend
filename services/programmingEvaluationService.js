@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const ProgrammingSubmission = require('../models/ProgrammingSubmission');
 const { AssessmentSegmentProgress } = require('../models/AssessmentConfigs');
-const { getPistonExecuteUrl, resolvePistonTimeouts } = require('../utils/pistonConfig');
+const { getPistonExecuteUrl, resolvePistonTimeouts, resolvePistonRuntime, PISTON_FETCH_TIMEOUT_MS } = require('../utils/pistonConfig');
 const { outputsMatch } = require('../utils/outputCompare');
 const { resolveSegmentQuestionWeight } = require('../utils/assessmentScoring');
 const { getFilesForPiston } = require('../controllers/codeEditorController');
@@ -56,8 +56,8 @@ async function evaluateProgrammingCode({ questionId, code, language, questionWei
   );
 
   const pistonEndpoint = getPistonExecuteUrl();
-  const pistonLanguage = String(language || 'javascript').toLowerCase();
-  const files = getFilesForPiston(pistonLanguage, code);
+  const runtime = await resolvePistonRuntime(language || 'python');
+  const files = getFilesForPiston(runtime.language, code);
   const hiddenCases = allTestCases.filter((tc) => tc.is_hidden);
   const scoringCases = hiddenCases.length > 0 ? hiddenCases : allTestCases;
   const caseWeight = perCaseWeight(questionWeight, scoringCases);
@@ -75,8 +75,8 @@ async function evaluateProgrammingCode({ questionId, code, language, questionWei
 
     try {
       const pistonPayload = {
-        language: pistonLanguage,
-        version: LANGUAGE_VERSIONS[pistonLanguage] || '*',
+        language: runtime.language,
+        version: runtime.version || LANGUAGE_VERSIONS[runtime.language] || '*',
         files,
         stdin: testCase.input || '',
         args: [],
@@ -86,7 +86,8 @@ async function evaluateProgrammingCode({ questionId, code, language, questionWei
       const response = await fetch(pistonEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pistonPayload)
+        body: JSON.stringify(pistonPayload),
+        signal: AbortSignal.timeout(PISTON_FETCH_TIMEOUT_MS)
       });
 
       if (response.ok) {
