@@ -517,7 +517,7 @@ class MasterDataController {
       const { id } = req.params;
       // Prevent deletion of core roles
       const role = await UserRole.findById(id);
-      if (role && ['primary_admin', 'college_admin', 'student'].includes(role.name)) {
+      if (role && ['primary_admin', 'campuszen_admin', 'college_admin', 'student'].includes(role.name)) {
         return res.status(400).json({ error: 'Cannot delete core system roles' });
       }
       await UserRole.delete(id);

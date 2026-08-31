@@ -326,17 +326,9 @@ class AdminController {
         }
       }
 
-      // Prevent deleting primary_admin users
-      if (userToDelete.role === 'primary_admin') {
-        return res.status(403).json({ error: 'Primary admin accounts cannot be deleted through this interface' });
-      }
-
-      // Check if this is the last primary admin (safety check)
-      if (userToDelete.role === 'primary_admin') {
-        const allAdmins = await User.getByRole('primary_admin');
-        if (allAdmins.length <= 1) {
-          return res.status(400).json({ error: 'Cannot delete the last primary admin account' });
-        }
+      // Prevent deleting platform admin users
+      if (userToDelete.role === 'primary_admin' || userToDelete.role === 'campuszen_admin') {
+        return res.status(403).json({ error: 'Platform admin accounts cannot be deleted through this interface' });
       }
 
       // Check if this is a college_admin and if they're the last one for their institution

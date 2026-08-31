@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
   name VARCHAR(255) NOT NULL,
   email VARCHAR(255) NOT NULL UNIQUE,
   password VARCHAR(255) NULL,
-  role ENUM('student', 'college_admin', 'primary_admin') NOT NULL DEFAULT 'student',
+  role ENUM('student', 'college_admin', 'primary_admin', 'campuszen_admin') NOT NULL DEFAULT 'student',
   role_id INT NULL,
   college_name VARCHAR(255) NULL,
   roll_number VARCHAR(50) NULL,

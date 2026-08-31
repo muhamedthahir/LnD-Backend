@@ -3,7 +3,7 @@ const pool = require('../config/db');
 class User {
   /**
    * Get role_id from user_roles table by role name
-   * @param {string} roleName - Role name (e.g., 'student', 'college_admin', 'primary_admin')
+   * @param {string} roleName - Role name (e.g., 'student', 'college_admin', 'primary_admin', 'campuszen_admin')
    * @returns {Promise<number|null>} - Role ID or null
    */
   static async getRoleIdByName(roleName) {
@@ -376,8 +376,8 @@ class User {
       const params = [];
       
       if (excludePrimaryAdmin) {
-        conditions.push('role != ?');
-        params.push('primary_admin');
+        conditions.push('role NOT IN (?, ?)');
+        params.push('primary_admin', 'campuszen_admin');
       }
       
       if (excludeCurrentUser) {

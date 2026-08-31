@@ -89,6 +89,7 @@ async function seedUserRoles(connection) {
   
   const roles = [
     { name: 'primary_admin', description: 'Primary Administrator', role_rank: 1 },
+    { name: 'campuszen_admin', description: 'CampusZen Administrator', role_rank: 1 },
     { name: 'college_admin', description: 'College Administrator', role_rank: 2 },
     { name: 'student', description: 'Student', role_rank: 3 }
   ];

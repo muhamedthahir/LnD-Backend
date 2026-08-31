@@ -23,6 +23,7 @@ ADD INDEX idx_role_id (role_id);
 -- 3. Insert user roles (ignore if already exists)
 INSERT IGNORE INTO user_roles (name, description, role_rank) VALUES 
 ('primary_admin', 'Primary administrator with full system access', 1),
+('campuszen_admin', 'CampusZen administrator with the same access as primary admin', 1),
 ('college_admin', 'College administrator with institution-level access', 2),
 ('student', 'Student user with course access', 3);
 

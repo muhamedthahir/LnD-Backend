@@ -12,6 +12,11 @@ const USER_ROLES = [
     role_rank: 1
   },
   {
+    name: 'campuszen_admin',
+    description: 'CampusZen administrator with the same access as primary admin',
+    role_rank: 1
+  },
+  {
     name: 'college_admin',
     description: 'College administrator with institution-level access',
     role_rank: 2

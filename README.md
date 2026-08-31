@@ -124,6 +124,7 @@ LnD-Backend/
 - **student**: Can view courses, enroll, access course content
 - **college_admin**: Can create and manage courses, topics, segments
 - **primary_admin**: Full administrative access
+- **campuszen_admin**: Same access as primary_admin
 
 ## Authentication
 

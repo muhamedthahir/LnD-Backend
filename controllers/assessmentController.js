@@ -2335,7 +2335,7 @@ const getAssessmentResult = async (req, res) => {
     }
 
     // Verify user or admin (primary_admin, college_admin, or generic admin)
-    const isAdmin = ['primary_admin', 'college_admin', 'admin'].includes(req.user.role);
+    const isAdmin = ['primary_admin', 'campuszen_admin', 'college_admin', 'admin'].includes(req.user.role);
     
     if (mapping.user_id !== req.user.id && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });

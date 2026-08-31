@@ -24,7 +24,7 @@ class QuestionController {
 
   // Helper to check if question belongs to user's institution
   static async canAccessQuestion(user, questionId) {
-    if (user.role === 'primary_admin') return true;
+    if (user.role === 'primary_admin' || user.role === 'campuszen_admin') return true;
     if (user.role !== 'college_admin') return true; // Students can access based on enrollment
     
     const question = await Question.findById(questionId);
