@@ -1,7 +1,40 @@
 const pool = require('../config/db');
 
 class Institution {
+  static async ensureDetailColumns() {
+    if (this._detailColumnsReady) return;
+
+    const statements = [
+      'ALTER TABLE institutions ADD COLUMN address TEXT NULL AFTER name',
+      'ALTER TABLE institutions ADD COLUMN spoc_contact_number VARCHAR(50) NULL AFTER address',
+      'ALTER TABLE institutions ADD COLUMN alternate_contact VARCHAR(50) NULL AFTER spoc_contact_number',
+      'ALTER TABLE institutions ADD COLUMN alternate_email VARCHAR(255) NULL AFTER alternate_contact',
+      "ALTER TABLE institutions ADD COLUMN status ENUM('active', 'inactive') NOT NULL DEFAULT 'active' AFTER alternate_email"
+    ];
+
+    for (const sql of statements) {
+      try {
+        await pool.execute(sql);
+      } catch (error) {
+        if (error.code !== 'ER_DUP_FIELDNAME') {
+          console.warn('Institution column migrate skipped:', error.code, error.sqlMessage || error.message);
+        }
+      }
+    }
+
+    try {
+      await pool.execute('CREATE INDEX idx_institutions_status ON institutions(status)');
+    } catch (error) {
+      if (error.code !== 'ER_DUP_KEYNAME' && error.code !== 'ER_DUP_FIELDNAME') {
+        // Index may already exist
+      }
+    }
+
+    this._detailColumnsReady = true;
+  }
+
   static async create(institutionData) {
+    await this.ensureDetailColumns();
     const {
       name,
       address = null,
@@ -51,6 +84,7 @@ class Institution {
   }
 
   static async getAllPaginated({ search, limit, offset }) {
+    await this.ensureDetailColumns();
     let query = 'SELECT * FROM institutions WHERE 1=1';
     const params = [];
 
@@ -77,6 +111,7 @@ class Institution {
   }
 
   static async getAll() {
+    await this.ensureDetailColumns();
     const [rows] = await pool.execute(
       'SELECT * FROM institutions ORDER BY name ASC'
     );
@@ -85,6 +120,7 @@ class Institution {
 
   /** Institutions available for assignment (dropdowns): active only */
   static async getAllActive() {
+    await this.ensureDetailColumns();
     try {
       const [rows] = await pool.execute(
         "SELECT * FROM institutions WHERE status = 'active' ORDER BY name ASC"
@@ -103,6 +139,7 @@ class Institution {
   }
 
   static async update(id, institutionData) {
+    await this.ensureDetailColumns();
     const {
       name,
       address = null,

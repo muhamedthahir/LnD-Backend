@@ -5,6 +5,11 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+const positiveInteger = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const poolOptions = {
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -12,21 +17,15 @@ const poolOptions = {
   database: process.env.DB_NAME,
   port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306,
   waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+  connectionLimit: positiveInteger(process.env.DB_CONNECTION_LIMIT, 10),
+  queueLimit: positiveInteger(process.env.DB_QUEUE_LIMIT, 100),
   // Return DATETIME as plain strings so JSON responses are not shifted by server timezone (UTC on EB).
   dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'],
   // Connection timeout settings
-  connectTimeout: 60000, // 60 seconds
-  acquireTimeout: 60000, // 60 seconds
-  timeout: 60000, // 60 seconds
+  connectTimeout: positiveInteger(process.env.DB_CONNECT_TIMEOUT_MS, 10000),
   // Enable automatic reconnection
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
-  // Retry configuration
-  reconnect: true,
-  // Handle connection errors
-  handleDisconnects: true
+  keepAliveInitialDelay: 0
 };
 // Optional SSL configuration
 if (process.env.USE_SSL === 'true') {
@@ -66,8 +65,6 @@ pool.on('connection', (connection) => {
     console.error('MySQL connection error:', err);
     if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
       console.log('Connection lost, will be reconnected automatically');
-    } else {
-      throw err;
     }
   });
 });
@@ -98,7 +95,9 @@ async function checkConnection(retries = 3) {
   }
 }
 
-checkConnection();
+if (process.env.npm_lifecycle_event !== 'test') {
+  checkConnection();
+}
 
 // Helper function to execute queries with retry logic
 async function executeWithRetry(query, params, retries = 3) {

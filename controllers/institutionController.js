@@ -3,7 +3,8 @@ const User = require('../models/User');
 const pool = require('../config/db');
 const bcrypt = require('bcrypt');
 const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
-const { sendOTPEmailWithTemplate } = require('../services/sesEmailService');
+const sesEmailService = require('../services/sesEmailService');
+const { validateCreateInstitutionInput, normalizeInstitutionCreatePayload } = require('../utils/institutionCreateLogic');
 
 class InstitutionController {
   static async getInstitutions(req, res) {
@@ -55,55 +56,43 @@ class InstitutionController {
 
   static async createInstitution(req, res) {
     try {
-      const {
-        name,
-        admin_name,
-        admin_email,
-        address,
-        spoc_contact_number,
-        alternate_contact,
-        alternate_email,
-        status
-      } = req.body;
-
-      if (!name || !admin_name || !admin_email) {
-        return res.status(400).json({ error: 'Institution name, admin name, and admin email are required' });
+      const validation = validateCreateInstitutionInput(req.body);
+      if (!validation.ok) {
+        return res.status(validation.status).json({ error: validation.error });
       }
 
-      if (alternate_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(alternate_email).trim())) {
-        return res.status(400).json({ error: 'Invalid alternate email format' });
-      }
+      const payload = normalizeInstitutionCreatePayload(req.body);
 
       // Check if institution already exists
-      const existingInstitution = await Institution.findByName(name);
+      const existingInstitution = await Institution.findByName(payload.name);
       if (existingInstitution) {
         return res.status(400).json({ error: 'Institution with this name already exists' });
       }
 
       // Create institution
       const institutionId = await Institution.create({
-        name,
-        address,
-        spoc_contact_number,
-        alternate_contact,
-        alternate_email,
-        status
+        name: payload.name,
+        address: payload.address,
+        spoc_contact_number: payload.spoc_contact_number,
+        alternate_contact: payload.alternate_contact,
+        alternate_email: payload.alternate_email,
+        status: payload.status
       });
 
       // Handle admin user
-      let adminUser = await User.findByEmail(admin_email);
+      let adminUser = await User.findByEmail(payload.admin_email);
       
       if (adminUser) {
         // User exists - promote to college_admin if not already
         if (adminUser.role !== 'college_admin') {
           await User.update(adminUser.id, {
             role: 'college_admin',
-            college_name: name
+            college_name: payload.name
           });
-        } else if (adminUser.college_name !== name) {
+        } else if (adminUser.college_name !== payload.name) {
           // Update college name if different
           await User.update(adminUser.id, {
-            college_name: name
+            college_name: payload.name
           });
         }
       } else {
@@ -111,30 +100,35 @@ class InstitutionController {
         const otp = generateOTP();
         const otpExpiresAt = getOTPExpiration();
 
-        const userId = await User.create({
-          name: admin_name,
-          email: admin_email,
+        await User.create({
+          name: payload.admin_name,
+          email: payload.admin_email,
           password: null,
           role: 'college_admin',
-          college_name: name,
+          college_name: payload.name,
           otp,
           otp_expires_at: otpExpiresAt
         });
 
         // Send OTP email using AWS SES and USER_INVITE template
         try {
-          const emailResult = await sendOTPEmailWithTemplate(admin_email, admin_name, otp, req.user?.id);
+          const emailResult = await sesEmailService.sendOTPEmailWithTemplate(
+            payload.admin_email,
+            payload.admin_name,
+            otp,
+            req.user?.id
+          );
           if (!emailResult.success) {
-            console.error(`Failed to send OTP email to ${admin_email}:`, emailResult.error);
+            console.error(`Failed to send OTP email to ${payload.admin_email}:`, emailResult.error);
           }
         } catch (emailError) {
-          console.error(`Failed to send OTP email to ${admin_email}:`, emailError);
+          console.error(`Failed to send OTP email to ${payload.admin_email}:`, emailError);
         }
 
         // Also log OTP to console for development
         console.log('\n========================================');
-        console.log(`[OTP GENERATED] College Admin: ${admin_name} (${admin_email})`);
-        console.log(`Institution: ${name}`);
+        console.log(`[OTP GENERATED] College Admin: ${payload.admin_name} (${payload.admin_email})`);
+        console.log(`Institution: ${payload.name}`);
         console.log(`OTP: ${otp}`);
         console.log(`Valid for 7 days`);
         console.log('========================================\n');
@@ -226,7 +220,7 @@ class InstitutionController {
 
           // Send OTP email using AWS SES and USER_INVITE template
           try {
-            const emailResult = await sendOTPEmailWithTemplate(admin_email, admin_name, otp, req.user?.id);
+            const emailResult = await sesEmailService.sendOTPEmailWithTemplate(admin_email, admin_name, otp, req.user?.id);
             if (!emailResult.success) {
               console.error(`Failed to send OTP email to ${admin_email}:`, emailResult.error);
             }
