@@ -60,16 +60,9 @@ class Question {
     const countQuery = `
       SELECT COUNT(*) as total
       FROM questions q
-      LEFT JOIN question_types qt ON q.question_type_id = qt.id
-      LEFT JOIN levels l ON q.level_id = l.id
-      LEFT JOIN statuses s ON q.status_id = s.id
-      LEFT JOIN categories c ON q.category_id = c.id
       LEFT JOIN question_banks qb ON q.question_bank_id = qb.id
-      LEFT JOIN users u ON q.created_by = u.id
       ${whereClause}
     `;
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
 
     // Get paginated results
     const dataQuery = `
@@ -88,14 +81,30 @@ class Question {
       LEFT JOIN question_banks qb ON q.question_bank_id = qb.id
       LEFT JOIN users u ON q.created_by = u.id
       ${whereClause}
-      ORDER BY q.created_at DESC
-      LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
+      ORDER BY q.created_at DESC, q.id DESC
+      LIMIT ${Math.max(1, Math.min(1000, parseInt(limit, 10) || 10))} OFFSET ${Math.max(0, parseInt(offset, 10) || 0)}
     `;
-    const [rows] = await pool.execute(dataQuery, params);
+    const [[rows], [countRows]] = await Promise.all([
+      pool.execute(dataQuery, params),
+      pool.execute(countQuery, params)
+    ]);
+    const total = countRows[0].total;
 
-    // Get tags for each question
-    for (const question of rows) {
-      question.tags = await this.getTags(question.id);
+    // One tag read for the page, not one round trip per question.
+    if (rows.length) {
+      const [tags] = await pool.execute(
+        `SELECT qt.question_id, t.* FROM question_tags qt
+         INNER JOIN tags t ON t.id = qt.tag_id
+         WHERE qt.question_id IN (${rows.map(() => '?').join(',')})`,
+        rows.map(question => question.id)
+      );
+      const byQuestion = new Map();
+      for (const { question_id, ...tag } of tags) {
+        const key = String(question_id);
+        if (!byQuestion.has(key)) byQuestion.set(key, []);
+        byQuestion.get(key).push(tag);
+      }
+      for (const question of rows) question.tags = byQuestion.get(String(question.id)) || [];
     }
 
     return { questions: rows, total };

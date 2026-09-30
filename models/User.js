@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const ensureColumns = require('../utils/ensureColumns');
 
 class User {
   /**
@@ -6,9 +7,9 @@ class User {
    * @param {string} roleName - Role name (e.g., 'student', 'college_admin', 'primary_admin', 'campuszen_admin')
    * @returns {Promise<number|null>} - Role ID or null
    */
-  static async getRoleIdByName(roleName) {
+  static async getRoleIdByName(roleName, executor = pool) {
     try {
-      const [rows] = await pool.execute(
+      const [rows] = await executor.execute(
         'SELECT id FROM user_roles WHERE name = ?',
         [roleName]
       );
@@ -23,18 +24,18 @@ class User {
     }
   }
 
-  static async create(userData) {
+  static async create(userData, executor = pool) {
     const { name, email, password, role, role_id, college_name, roll_number, department, section, degree, otp, otp_expires_at } = userData;
     
     try {
       // Get role_id from role name if not provided
       let finalRoleId = role_id;
       if (!finalRoleId && role) {
-        finalRoleId = await this.getRoleIdByName(role);
+        finalRoleId = await this.getRoleIdByName(role, executor);
       }
 
       // Try full insert with all columns including role_id
-      const [result] = await pool.execute(
+      const [result] = await executor.execute(
         'INSERT INTO users (name, email, password, role, role_id, college_name, roll_number, department, section, degree, otp, otp_expires_at, password_set) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           name, 
@@ -57,7 +58,7 @@ class User {
       // If role_id column doesn't exist, try without it
       if (error.code === 'ER_BAD_FIELD_ERROR' && error.message.includes('role_id')) {
         console.warn('role_id column missing, inserting without it. Please run migration.');
-        const [result] = await pool.execute(
+        const [result] = await executor.execute(
           'INSERT INTO users (name, email, password, role, college_name, roll_number, department, section, degree, otp, otp_expires_at, password_set) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             name, 
@@ -79,7 +80,7 @@ class User {
       // If other columns don't exist, use basic insert
       if (error.code === 'ER_BAD_FIELD_ERROR') {
         console.warn('New columns missing, using basic insert. Please run migration.');
-        const [result] = await pool.execute(
+        const [result] = await executor.execute(
           'INSERT INTO users (name, email, password, role, college_name) VALUES (?, ?, ?, ?, ?)',
           [name, email, password || null, role, college_name || null]
         );
@@ -132,20 +133,7 @@ class User {
       { name: 'reset_token_expires_at', definition: 'TIMESTAMP NULL' }
     ];
 
-    for (const col of columnsToAdd) {
-      try {
-        await pool.execute(`ALTER TABLE users ADD COLUMN ${col.name} ${col.definition}`);
-        console.log(`Added column ${col.name} to users`);
-      } catch (error) {
-        // Ignore if column already exists
-      }
-    }
-
-    try {
-      await pool.execute('ALTER TABLE users ADD INDEX idx_reset_token (reset_token)');
-    } catch (error) {
-      // Ignore if index already exists
-    }
+    await ensureColumns(pool, 'users', columnsToAdd);
   }
 
   static async setResetToken(userId, resetToken, resetTokenExpiresAt) {
@@ -402,33 +390,13 @@ class User {
       const offsetInt = Math.max(0, parseInt(offset, 10) || 0);
 
       const countQuery = `SELECT COUNT(*) as total FROM users${whereClause ? ' ' + whereClause : ''}`;
-      let countRows;
-      try {
-        if (params.length > 0) {
-          [countRows] = await pool.execute(countQuery, params);
-        } else {
-          [countRows] = await pool.query(countQuery);
-        }
-      } catch (countError) {
-        console.error('Error in count query:', countError);
-        throw countError;
-      }
-      const total = countRows[0].total;
-
       const selectQuery = `SELECT id, name, email, role, college_name, roll_number, department, section, degree, password_set, created_at
-        FROM users${whereClause ? ' ' + whereClause : ''} ORDER BY created_at DESC LIMIT ${limitInt} OFFSET ${offsetInt}`;
-      
-      let rows;
-      try {
-        if (params.length > 0) {
-          [rows] = await pool.execute(selectQuery, params);
-        } else {
-          [rows] = await pool.query(selectQuery);
-        }
-      } catch (selectError) {
-        console.error('Error in select query:', selectError);
-        throw selectError;
-      }
+        FROM users${whereClause ? ' ' + whereClause : ''} ORDER BY created_at DESC, id DESC LIMIT ${limitInt} OFFSET ${offsetInt}`;
+      const [[rows], [countRows]] = await Promise.all([
+        pool.execute(selectQuery, params),
+        pool.execute(countQuery, params)
+      ]);
+      const total = countRows[0].total;
       
       const users = rows.map(row => {
         const status = (row.password_set === true || row.password_set === 1) ? 'activated' : 'pending';

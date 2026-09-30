@@ -73,8 +73,10 @@ class CourseController {
         filters.college_name = currentUser.college_name;
       }
       
-      const courses = await Course.getAll(limit, offset, filters);
-      const totalCount = await Course.getCount(filters);
+      const [courses, totalCount] = await Promise.all([
+        Course.getAll(limit, offset, filters),
+        Course.getCount(filters)
+      ]);
       
       res.json({
         courses,
@@ -223,4 +225,3 @@ class CourseController {
 }
 
 module.exports = CourseController;
-

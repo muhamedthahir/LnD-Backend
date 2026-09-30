@@ -84,39 +84,24 @@ class Segment {
     const segment = await this.findById(id);
     if (!segment) return null;
 
-    let conceptsData = [];
-    let inclassPractice = [];
-    let postclassPractice = [];
-
-    try {
-      const [c] = await pool.execute(
-        'SELECT * FROM concepts WHERE segment_id = ? ORDER BY order_index',
-        [id]
-      );
-      conceptsData = c;
-    } catch (err) {
-      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
-    }
-
-    try {
-      const [i] = await pool.execute(
-        'SELECT * FROM inclass_practice WHERE segment_id = ? ORDER BY order_index',
-        [id]
-      );
-      inclassPractice = i;
-    } catch (err) {
-      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
-    }
-
-    try {
-      const [p] = await pool.execute(
-        'SELECT * FROM postclass_practice WHERE segment_id = ? ORDER BY order_index',
-        [id]
-      );
-      postclassPractice = p;
-    } catch (err) {
-      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
-    }
+    const loadRelated = async (table) => {
+      try {
+        const [rows] = await pool.execute(
+          `SELECT * FROM ${table} WHERE segment_id = ? ORDER BY order_index`,
+          [id]
+        );
+        return rows;
+      } catch (err) {
+        if (err.code === 'ER_NO_SUCH_TABLE') return [];
+        throw err;
+      }
+    };
+    // Table names are constants; only the segment id comes from the request.
+    const [conceptsData, inclassPractice, postclassPractice] = await Promise.all([
+      loadRelated('concepts'),
+      loadRelated('inclass_practice'),
+      loadRelated('postclass_practice')
+    ]);
 
     return {
       ...segment,
@@ -128,4 +113,3 @@ class Segment {
 }
 
 module.exports = Segment;
-

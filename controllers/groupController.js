@@ -19,21 +19,12 @@ class GroupController {
       // college_admin can only see groups from their institution
       let collegeFilter = college || null;
       if (currentUser.role === 'college_admin') {
+        if (!currentUser.college_name) return res.status(403).json({ error: 'Your account must be assigned to an institution' });
         collegeFilter = currentUser.college_name;
       }
       
-      const groups = await Group.getAll(collegeFilter, null, null);
-      
-      // Filter by name if provided
-      let filteredGroups = groups;
-      if (name) {
-        const nameLower = name.toLowerCase();
-        filteredGroups = groups.filter(group => 
-          group.name.toLowerCase().includes(nameLower)
-        );
-      }
-      
-      res.json({ groups: filteredGroups });
+      const groups = await Group.getAll(collegeFilter, null, null, typeof name === 'string' ? name : '');
+      res.json({ groups });
     } catch (error) {
       console.error('Get groups error:', error);
       res.status(500).json({ error: 'Internal server error' });

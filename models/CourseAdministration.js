@@ -124,16 +124,14 @@ class CourseAdministration {
   static async getStatusStats(filters = {}) {
     try {
       let query = `
-        SELECT a.status, COUNT(DISTINCT a.id) as count
+        SELECT a.status, COUNT(*) as count
         FROM course_administrations a
-        LEFT JOIN enrollments e2 ON e2.administration_id = a.id AND e2.student_id IS NOT NULL
-        LEFT JOIN users u2 ON e2.student_id = u2.id
         WHERE 1=1
       `;
       const params = [];
 
       if (filters.college) {
-        query += ' AND (a.college = ? OR u2.college_name = ?)';
+        query += ' AND (a.college = ? OR EXISTS (SELECT 1 FROM enrollments e2 JOIN users u2 ON u2.id = e2.student_id WHERE e2.administration_id = a.id AND u2.college_name = ?))';
         params.push(filters.college, filters.college);
       }
 
@@ -160,81 +158,53 @@ class CourseAdministration {
     const result = await this.getAll({
       limit,
       offset: 0,
+      includeTotal: false,
       filters: filters.college ? { college: filters.college } : {}
     });
     return result.administrations || [];
   }
 
   static async getAll(options = {}) {
-    const { limit = 50, offset = 0, filters = {} } = options;
+    const { limit = 50, offset = 0, filters = {}, includeTotal = true } = options;
     
     try {
-      let query = `
-        SELECT a.*, 
-         c.name as course_name,
-         u.name as created_by_name,
-         COUNT(DISTINCT e.id) as total_invites,
-         COALESCE(a.college, GROUP_CONCAT(DISTINCT u2.college_name)) as colleges
-         FROM course_administrations a
-         LEFT JOIN courses c ON a.course_id = c.id
-         LEFT JOIN users u ON a.created_by = u.id
-         LEFT JOIN enrollments e ON e.administration_id = a.id AND e.student_id IS NOT NULL
-         LEFT JOIN enrollments e2 ON e2.administration_id = a.id AND e2.student_id IS NOT NULL
-         LEFT JOIN users u2 ON e2.student_id = u2.id
-         WHERE 1=1
-      `;
+      let where = ' WHERE 1=1';
       const params = [];
 
       // Apply filters
       if (filters.administrationName) {
-        query += ' AND a.administration_name LIKE ?';
+        where += ' AND a.administration_name LIKE ?';
         params.push(`%${filters.administrationName}%`);
       }
 
       if (filters.status && filters.status !== 'all') {
-        query += ' AND a.status = ?';
+        where += ' AND a.status = ?';
         params.push(filters.status);
       }
 
       if (filters.college) {
-        query += ' AND (a.college = ? OR u2.college_name = ?)';
+        where += ' AND (a.college = ? OR EXISTS (SELECT 1 FROM enrollments e2 JOIN users u2 ON u2.id = e2.student_id WHERE e2.administration_id = a.id AND u2.college_name = ?))';
         params.push(filters.college, filters.college);
       }
 
-      query += ' GROUP BY a.id';
-      query += ' ORDER BY a.created_at DESC';
-      // Use parseInt to ensure integers for LIMIT and OFFSET
-      query += ` LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
-
-      const [rows] = await executeWithRetry(query, params);
-
-      // Get total count
-      let countQuery = `
-        SELECT COUNT(DISTINCT a.id) as total
+      // Joining enrollments twice multiplies N invites into N*N intermediate rows.
+      // Indexed correlated counts aggregate only the requested administration rows.
+      const query = `SELECT a.*, c.name as course_name, u.name as created_by_name,
+        (SELECT COUNT(*) FROM enrollments e WHERE e.administration_id = a.id AND e.student_id IS NOT NULL) as total_invites,
+        COALESCE(a.college, (SELECT GROUP_CONCAT(DISTINCT u2.college_name)
+          FROM enrollments e2 JOIN users u2 ON u2.id = e2.student_id
+          WHERE e2.administration_id = a.id ${filters.college ? 'AND u2.college_name = ?' : ''})) as colleges
         FROM course_administrations a
-        LEFT JOIN enrollments e2 ON e2.administration_id = a.id AND e2.student_id IS NOT NULL
-        LEFT JOIN users u2 ON e2.student_id = u2.id
-        WHERE 1=1
-      `;
-      const countParams = [];
-
-      if (filters.administrationName) {
-        countQuery += ' AND a.administration_name LIKE ?';
-        countParams.push(`%${filters.administrationName}%`);
-      }
-
-      if (filters.status && filters.status !== 'all') {
-        countQuery += ' AND a.status = ?';
-        countParams.push(filters.status);
-      }
-
-      if (filters.college) {
-        countQuery += ' AND (a.college = ? OR u2.college_name = ?)';
-        countParams.push(filters.college, filters.college);
-      }
-
-      const [countRows] = await executeWithRetry(countQuery, countParams);
-      const total = countRows[0]?.total || 0;
+        LEFT JOIN courses c ON c.id = a.course_id
+        LEFT JOIN users u ON u.id = a.created_by
+        ${where} ORDER BY a.created_at DESC, a.id DESC
+        LIMIT ${Math.max(1, parseInt(limit, 10) || 50)} OFFSET ${Math.max(0, parseInt(offset, 10) || 0)}`;
+      const queryParams = filters.college ? [filters.college, ...params] : params;
+      const [[rows], [countRows]] = await Promise.all([
+        executeWithRetry(query, queryParams),
+        includeTotal ? executeWithRetry(`SELECT COUNT(*) as total FROM course_administrations a ${where}`, params) : Promise.resolve([])
+      ]);
+      const total = includeTotal ? (countRows[0]?.total || 0) : null;
 
       return {
         administrations: rows,

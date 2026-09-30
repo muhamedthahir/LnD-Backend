@@ -166,23 +166,21 @@ class ProgressService {
       [user_id, course_id]
     );
     
-    // For each topic, get segment progress
-    for (const topic of topics) {
-      // Get lesson segments progress
-      const [lessons] = await pool.execute(
+    // Fetch the whole course in two queries instead of two queries per topic.
+    const [[lessons], [practices], courseProgress, [userCourse]] = await Promise.all([
+      pool.execute(
         `SELECT s.*, 
                 COALESCE(usp.status, 'not_started') as progress_status,
                 COALESCE(usp.progress_percentage, 0) as progress_percentage,
                 COALESCE(usp.time_spent_seconds, 0) as time_spent_seconds
          FROM segments s
+         INNER JOIN topics t ON t.id = s.topic_id
          LEFT JOIN user_segment_progress usp ON s.id = usp.segment_id AND usp.user_id = ?
-         WHERE s.topic_id = ?
+         WHERE t.course_id = ?
          ORDER BY s.order_index`,
-        [user_id, topic.id]
-      );
-      
-      // Get practice segments progress
-      const [practices] = await pool.execute(
+        [user_id, course_id]
+      ),
+      pool.execute(
         `SELECT ps.*, 
                 COALESCE(usp.status, 'not_started') as progress_status,
                 COALESCE(usp.progress_percentage, 0) as progress_percentage,
@@ -190,23 +188,29 @@ class ProgressService {
                 COALESCE(usp.items_total, 0) as items_total,
                 COALESCE(usp.time_spent_seconds, 0) as time_spent_seconds
          FROM practice_segments ps
+         INNER JOIN topics t ON t.id = ps.topic_id
          LEFT JOIN user_segment_progress usp ON ps.id = usp.practice_segment_id AND usp.user_id = ?
-         WHERE ps.topic_id = ?`,
-        [user_id, topic.id]
-      );
-      
-      topic.lessons = lessons;
-      topic.practice_segments = practices;
+         WHERE t.course_id = ?`,
+        [user_id, course_id]
+      ),
+      UserTopicProgress.getCourseProgressSummary(user_id, course_id),
+      pool.execute(
+        'SELECT * FROM user_courses WHERE user_id = ? AND course_id = ?',
+        [user_id, course_id]
+      )
+    ]);
+
+    const topicsById = new Map(topics.map(topic => {
+      topic.lessons = [];
+      topic.practice_segments = [];
+      return [String(topic.id), topic];
+    }));
+    for (const lesson of lessons) {
+      topicsById.get(String(lesson.topic_id))?.lessons.push(lesson);
     }
-    
-    // Get overall course progress
-    const courseProgress = await UserTopicProgress.getCourseProgressSummary(user_id, course_id);
-    
-    // Get user_course record
-    const [userCourse] = await pool.execute(
-      'SELECT * FROM user_courses WHERE user_id = ? AND course_id = ?',
-      [user_id, course_id]
-    );
+    for (const practice of practices) {
+      topicsById.get(String(practice.topic_id))?.practice_segments.push(practice);
+    }
     
     const progressPercentage = userCourse[0]?.progress_percentage || 0;
     const status = userCourse[0]?.status || 'not_started';

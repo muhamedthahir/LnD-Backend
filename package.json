@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test tests/institutionCreate.logic.test.js tests/institutionCreate.controller.test.js",
+    "test": "node --test tests/*.test.js scripts/testPerformance.cjs",
+    "db:performance": "node scripts/performanceIndexes.js",
     "start": "node app.js",
     "dev": "nodemon app.js",
     "seed": "node scripts/seedUsers.js",

@@ -18,22 +18,27 @@ class Group {
     return rows[0];
   }
 
-  static async getAll(collegeName = null, limit = 50, offset = 0) {
+  static async getAll(collegeName = null, limit = 50, offset = 0, name = '') {
     let query = `
-      SELECT g.*, u.name as creator_name, COUNT(gm.user_id) as member_count 
+      SELECT g.*, u.name as creator_name,
+             (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) as member_count
       FROM \`groups\` g 
       LEFT JOIN users u ON g.created_by = u.id 
-      LEFT JOIN group_members gm ON g.id = gm.group_id 
     `;
     
     const params = [];
     
+    query += ' WHERE 1=1';
     if (collegeName) {
-      query += ' WHERE g.college_name = ?';
+      query += ' AND g.college_name = ?';
       params.push(collegeName);
     }
+    if (name) {
+      query += ' AND g.name LIKE ?';
+      params.push(`%${name}%`);
+    }
     
-    query += ' GROUP BY g.id ORDER BY g.created_at DESC';
+    query += ' ORDER BY g.created_at DESC, g.id DESC';
     
     // Only add LIMIT/OFFSET if provided
     if (limit != null && offset != null) {

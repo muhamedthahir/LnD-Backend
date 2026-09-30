@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const ensureColumns = require('../utils/ensureColumns');
 const { v4: uuidv4 } = require('uuid');
 const { resolveSegmentQuestionWeight } = require('../utils/assessmentScoring');
 const { isAssessmentExpired, isAssessmentNotStartedYet } = require('../utils/assessmentConfigUtils');
@@ -76,20 +77,11 @@ class AssessmentUserMapping {
       { name: 'segment_time_remaining', definition: 'INT DEFAULT 0' },
       { name: 'attempt_count', definition: 'INT DEFAULT 1' },
       { name: 'total_time_worked', definition: 'INT DEFAULT 0' },
-      { name: 'refresh_violation_count', definition: 'INT DEFAULT 1' }
+      { name: 'refresh_violation_count', definition: 'INT DEFAULT 1' },
+      { name: 'last_answer_saved_at', definition: 'DATETIME DEFAULT NULL' }
     ];
 
-    for (const col of columnsToAdd) {
-      try {
-        await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN ${col.name} ${col.definition}`);
-        console.log(`Added column ${col.name} to assessment_user_mappings`);
-      } catch (error) {
-        // Column already exists - ignore
-        if (!error.message.includes('Duplicate column')) {
-          console.log(`Column ${col.name} already exists or error:`, error.message);
-        }
-      }
-    }
+    await ensureColumns(pool, 'assessment_user_mappings', columnsToAdd);
   }
 
   /**
@@ -413,22 +405,8 @@ class AssessmentUserMapping {
     // Check if this is a re-attempt (already has an attempt)
     const isReAttempt = mapping.assessment_started_time !== null;
 
-    // Ensure required columns exist (for production compatibility)
-    try {
-      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN time_remaining INT DEFAULT 0`);
-    } catch (e) { /* Column may already exist */ }
-    try {
-      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN segment_time_remaining INT DEFAULT 0`);
-    } catch (e) { /* Column may already exist */ }
-    try {
-      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN attempt_count INT DEFAULT 1`);
-    } catch (e) { /* Column may already exist */ }
-    // Tracks when the candidate last saved an answer. Unlike last_activity_at (which is
-    // bumped by periodic auto-save/progress pings), this is only updated on answer saves,
-    // so it gives a clean per-question timing signal for anomaly detection.
-    try {
-      await pool.execute(`ALTER TABLE assessment_user_mappings ADD COLUMN last_answer_saved_at DATETIME DEFAULT NULL`);
-    } catch (e) { /* Column may already exist */ }
+    // Single-flight, once per process; never issue repeated ALTERs on every start.
+    await this.addMissingColumns();
 
     await pool.execute(
       `UPDATE assessment_user_mappings SET

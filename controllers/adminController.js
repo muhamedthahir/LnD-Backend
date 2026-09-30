@@ -11,7 +11,7 @@ const Degree = require('../models/Degree');
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
 
 class AdminController {
   static async getUsers(req, res) {
@@ -27,11 +27,10 @@ class AdminController {
       let collegeFilter = college || null;
       if (currentUser.role === 'college_admin') {
         // Force filter to college_admin's institution only
+        if (!currentUser.college_name) return res.status(403).json({ error: 'Your account must be assigned to an institution' });
         collegeFilter = currentUser.college_name;
       }
       
-      // Debug logging
-      console.log('GetUsers called with:', { search, college: collegeFilter, limit: limitInt, offset: offsetInt, userRole: currentUser.role });
       
       // Get total count and paginated users with filters applied at database level
       const result = await User.getAllPaginated({
@@ -43,7 +42,6 @@ class AdminController {
         excludeCurrentUser: currentUser ? currentUser.id : null
       });
 
-      console.log('GetUsers result:', { userCount: result.users.length, total: result.total });
 
       res.json({ 
         users: result.users,
@@ -419,135 +417,41 @@ class AdminController {
 
   static async uploadBulkUsers(req, res) {
     try {
-      const { college_name } = req.body;
-      const currentUser = req.user;
-      
-      if (!req.file) {
-        return res.status(400).json({ error: 'Excel file is required' });
+      const college = req.user.role === 'college_admin' ? req.user.college_name : String(req.body.college_name || '').trim();
+      if (!college) return res.status(400).json({ error: 'Your institution is required before uploading students' });
+      if (college.length > 255) return res.status(400).json({ error: 'Institution name is too long' });
+      if (Array.isArray(req.body.rows)) {
+        if (Buffer.byteLength(JSON.stringify(req.body), 'utf8') > 7000) return res.status(413).json({ error: 'Send student batches smaller than 7 KB.' });
+        const rows = require('../utils/bulkStudentRows').normalizeRows(req.body.rows);
+        const job = await require('../services/bulkStudentUpload').acceptChunk(req.user, college, { ...req.body, rows });
+        return res.status(202).json(job);
       }
-
-      // college_admin can only upload users to their own institution
-      let finalCollegeName = college_name;
-      if (currentUser.role === 'college_admin') {
-        finalCollegeName = currentUser.college_name;
+      if (!req.file) return res.status(400).json({ error: 'Excel file is required' });
+      let rows;
+      try {
+        const workbook = XLSX.read(req.file.buffer, { type: 'buffer', sheetRows: 5002 });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        if (!worksheet) throw new Error('No worksheet');
+        rows = require('../utils/bulkStudentRows').normalizeRows(XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false }));
+      } catch (error) {
+        return res.status(400).json({ error: error.status ? error.message : 'Unable to read the spreadsheet. Upload the Excel template as .xlsx or .xls.' });
       }
-
-      if (!finalCollegeName) {
-        return res.status(400).json({ error: 'College name is required' });
-      }
-
-      // Parse Excel file
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(worksheet);
-
-      const createdUsers = [];
-      const errors = [];
-
-      for (let i = 0; i < data.length; i++) {
-        const row = data[i];
-        const name = row['Name'] || row['name'];
-        const email = row['Email'] || row['email'];
-        const roll_number = row['Roll Number'] || row['roll_number'] || null;
-        const department = row['Department'] || row['department'] || null;
-        const section = row['Section'] || row['section'] || '1';
-        const degree = row['Degree'] || row['degree'] || null;
-
-        if (!name || !email) {
-          errors.push(`Row ${i + 2}: Missing name or email`);
-          continue;
-        }
-
-        if (!roll_number || !String(roll_number).trim()) {
-          errors.push(`Row ${i + 2}: Roll number is required`);
-          continue;
-        }
-
-        const deptRaw = department != null ? String(department).trim() : '';
-        if (!deptRaw) {
-          errors.push(`Row ${i + 2}: Department is required`);
-          continue;
-        }
-
-        try {
-          // Check if user exists
-          const existingUser = await User.findByEmail(email);
-          
-          if (existingUser) {
-            errors.push(`Row ${i + 2}: User with email ${email} already exists`);
-            continue;
-          }
-
-          const canonicalDepartment = await Department.ensureExists(deptRaw);
-          let canonicalDegree = null;
-          if (degree != null && String(degree).trim()) {
-            canonicalDegree = await Degree.ensureExists(degree);
-          }
-
-          // Generate OTP for new user
-          const otp = generateOTP();
-          const otpExpiresAt = getOTPExpiration();
-          
-          // Create new user without password (will be set via OTP)
-          const userId = await User.create({
-            name,
-            email,
-            password: null,
-            role: 'student',
-            college_name: finalCollegeName,
-            roll_number: String(roll_number).trim(),
-            department: canonicalDepartment,
-            section: section || '1',
-            degree: canonicalDegree,
-            otp,
-            otp_expires_at: otpExpiresAt
-          });
-          
-          const user = await User.findById(userId);
-
-          // Send OTP email using AWS SES and USER_INVITE template
-          try {
-            const emailResult = await sendOTPEmailWithTemplate(email, name, otp, req.user?.id);
-            if (!emailResult.success) {
-              console.error(`Failed to send OTP email to ${email}:`, emailResult.error);
-            }
-          } catch (emailError) {
-            console.error(`Failed to send OTP email to ${email}:`, emailError);
-          }
-          
-          // Also log OTP to console for development
-          console.log(`\n[OTP GENERATED] User: ${name} (${email}) - OTP: ${otp}\n`);
-          
-          createdUsers.push({
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            roll_number: user.roll_number,
-            department: user.department,
-            section: user.section
-          });
-        } catch (error) {
-          if (error.code === 'ER_DUP_ENTRY') {
-            errors.push(`Row ${i + 2}: User with email ${email} already exists`);
-          } else {
-            errors.push(`Row ${i + 2}: ${error.message}`);
-          }
-        }
-      }
-
-      res.json({
-        message: 'Users uploaded successfully',
-        created: createdUsers.length,
-        total: data.length,
-        errors: errors.length > 0 ? errors : undefined,
-        users: createdUsers
-      });
+      const job = await require('../services/bulkStudentUpload').enqueue(req.user, college, rows);
+      return res.status(202).json({ ...job, message: 'Student upload accepted. Check its progress until completion.' });
     } catch (error) {
-      console.error('Upload bulk users error:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      console.error('Bulk upload acceptance failed:', error.code || 'unexpected_error');
+      return res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to accept this upload. No import was queued. Please try again.' });
     }
   }
+
+  static async getBulkUploadStatus(req, res) {
+    try {
+      res.json(await require('../services/bulkStudentUpload').getJob(req.user, req.params.jobId));
+    } catch (error) {
+      res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to read upload progress. The import may still be running.' });
+    }
+  }
+
   static async resendOTP(req, res) {
     try {
       const { id } = req.params;
