@@ -7,6 +7,7 @@ import time
 import urllib.request
 import io
 import zipfile
+from datetime import datetime, timedelta, timezone
 
 
 def aws(*args):
@@ -27,6 +28,13 @@ for distribution in distributions:
         name, identifier = acl_id.rsplit('/', 2)[-2:]
         acl = aws('wafv2', 'get-web-acl', '--name', name, '--id', identifier, '--scope', 'CLOUDFRONT', '--region', 'us-east-1')['WebACL']
         print('API WAF rules:', [{'Name': rule['Name'], 'Priority': rule['Priority'], 'Action': rule.get('Action'), 'ManagedRuleGroup': rule['Statement'].get('ManagedRuleGroupStatement')} for rule in acl['Rules']])
+        for rule in acl['Rules']:
+            window_end = datetime.now(timezone.utc)
+            window_start = window_end - timedelta(hours=2)
+            samples = aws('wafv2', 'get-sampled-requests', '--web-acl-arn', acl_id, '--rule-metric-name', rule['VisibilityConfig']['MetricName'], '--scope', 'CLOUDFRONT', '--time-window', json.dumps({'StartTime': window_start.isoformat(), 'EndTime': window_end.isoformat()}), '--max-items', '100', '--region', 'us-east-1')
+            for sample in samples.get('SampledRequests', []):
+                if '/api/admin/users/bulk/' in sample['Request']['URI']:
+                    print('Upload WAF sample:', {'Timestamp': sample.get('Timestamp'), 'Action': sample.get('Action'), 'RuleNameWithinRuleGroup': sample.get('RuleNameWithinRuleGroup'), 'Method': sample['Request']['Method'], 'URI': sample['Request']['URI'].split('?')[0], 'Labels': sample.get('Labels')})
         try:
             logging = aws('wafv2', 'get-logging-configuration', '--resource-arn', acl_id, '--region', 'us-east-1')
             print('WAF log destinations:', logging.get('LoggingConfiguration', {}).get('LogDestinationConfigs'))
