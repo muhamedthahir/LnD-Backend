@@ -8,7 +8,8 @@ import urllib.request
 
 
 def aws(*args):
-    return json.loads(subprocess.check_output(['aws', *args, '--output', 'json'], text=True))
+    output = subprocess.check_output(['aws', *args, '--output', 'json'], text=True)
+    return json.loads(output) if output.strip() else {}
 
 
 environments = aws('elasticbeanstalk', 'describe-environments', '--environment-names', 'Backend-env')
