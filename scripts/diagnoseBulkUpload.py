@@ -19,12 +19,14 @@ for distribution in distributions:
     if distribution['DomainName'] != 'd3hxnknkhl8llf.cloudfront.net':
         continue
     config = aws('cloudfront', 'get-distribution-config', '--id', distribution['Id'])['DistributionConfig']
-    print('API CloudFront:', {'Id': distribution['Id'], 'WebACLId': config.get('WebACLId'), 'Origins': config['Origins'], 'DefaultCacheBehavior': config['DefaultCacheBehavior'], 'CacheBehaviors': config.get('CacheBehaviors')})
+    def behavior(value):
+        return {key: value.get(key) for key in ['PathPattern', 'AllowedMethods', 'CachePolicyId', 'OriginRequestPolicyId', 'TargetOriginId']}
+    print('API CloudFront:', {'Id': distribution['Id'], 'WebACLId': config.get('WebACLId'), 'Origins': [{'Id': origin['Id'], 'DomainName': origin['DomainName'], 'CustomOriginConfig': origin.get('CustomOriginConfig')} for origin in config['Origins']['Items']], 'DefaultCacheBehavior': behavior(config['DefaultCacheBehavior']), 'CacheBehaviors': [behavior(value) for value in config.get('CacheBehaviors', {}).get('Items', [])]})
     acl_id = config.get('WebACLId')
     if acl_id and ':wafv2:' in acl_id:
         name, identifier = acl_id.rsplit('/', 2)[-2:]
         acl = aws('wafv2', 'get-web-acl', '--name', name, '--id', identifier, '--scope', 'CLOUDFRONT', '--region', 'us-east-1')['WebACL']
-        print('API WAF rules:', acl['Rules'])
+        print('API WAF rules:', [{'Name': rule['Name'], 'Priority': rule['Priority'], 'Action': rule.get('Action'), 'ManagedRuleGroup': rule['Statement'].get('ManagedRuleGroupStatement')} for rule in acl['Rules']])
         try:
             logging = aws('wafv2', 'get-logging-configuration', '--resource-arn', acl_id, '--region', 'us-east-1')
             print('WAF log destinations:', logging.get('LoggingConfiguration', {}).get('LogDestinationConfigs'))
