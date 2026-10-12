@@ -341,12 +341,10 @@ class AssessmentSegment {
   }
 
   /**
-   * Get segment with all questions
+   * Bulk-load questions for one or more segments
    */
-  static async getWithQuestions(id) {
-    const segment = await this.findById(id);
-    if (!segment) return null;
-
+  static async getQuestionsBySegmentIds(ids) {
+    if (!ids.length) return { programmingQuestions: [], mcqQuestions: [] };
     // Get programming questions
     const [programmingQuestions] = await pool.execute(
       `SELECT spq.*, 
@@ -364,9 +362,9 @@ class AssessmentSegment {
        JOIN programming_questions pq ON spq.programming_question_id = pq.id
        JOIN questions q on pq.question_id = q.id
        LEFT JOIN levels l ON q.level_id = l.id
-       WHERE spq.assessment_segment_id = ?
-       ORDER BY spq.sequence_order ASC`,
-      [id]
+       WHERE spq.assessment_segment_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY spq.assessment_segment_id, spq.sequence_order ASC`,
+      ids
     );
 
     // Get MCQ questions
@@ -386,10 +384,18 @@ class AssessmentSegment {
        JOIN mcq_multiselect_questions mq ON smq.mcq_question_id = mq.id
        JOIN questions q ON mq.question_id = q.id
        LEFT JOIN levels l ON q.level_id = l.id
-       WHERE smq.assessment_segment_id = ?
-       ORDER BY smq.sequence_order ASC`,
-      [id]
+       WHERE smq.assessment_segment_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY smq.assessment_segment_id, smq.sequence_order ASC`,
+      ids
     );
+    return { programmingQuestions, mcqQuestions };
+  }
+
+  static async getWithQuestions(id) {
+    const segment = await this.findById(id);
+    if (!segment) return null;
+
+    const { programmingQuestions, mcqQuestions } = await this.getQuestionsBySegmentIds([id]);
 
     segment.programming_questions = programmingQuestions;
     segment.mcq_questions = mcqQuestions;
@@ -484,4 +490,3 @@ class AssessmentSegment {
 }
 
 module.exports = AssessmentSegment;
-

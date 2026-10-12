@@ -58,17 +58,27 @@ class QuestionBank {
       countParams.push(statusId);
     }
     
-    const [countRows] = await pool.execute(countQuery, countParams);
-    const total = countRows && countRows[0] ? countRows[0].total : 0;
-
     // Get paginated results
-    query += ' ORDER BY qb.created_at DESC';
-    query += ` LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
-    const [rows] = await pool.execute(query, params);
-
-    // Get tags for each question bank
-    for (const bank of rows) {
-      bank.tags = await this.getTags(bank.id);
+    const pageSize = Math.max(1, Math.min(1000, Number.parseInt(limit, 10) || 10));
+    const start = Math.max(0, Number.parseInt(offset, 10) || 0);
+    query += ` ORDER BY qb.created_at DESC, qb.id DESC LIMIT ${pageSize} OFFSET ${start}`;
+    const [[rows], [countRows]] = await Promise.all([
+      pool.execute(query, params), pool.execute(countQuery, countParams)
+    ]);
+    const total = countRows && countRows[0] ? countRows[0].total : 0;
+    if (rows.length) {
+      const [tags] = await pool.execute(
+        `SELECT qbt.question_bank_id, t.* FROM question_bank_tags qbt
+         JOIN tags t ON t.id = qbt.tag_id WHERE qbt.question_bank_id IN (${rows.map(() => '?').join(',')})`,
+        rows.map(bank => bank.id)
+      );
+      const byBank = new Map();
+      for (const { question_bank_id, ...tag } of tags) {
+        const key = String(question_bank_id);
+        if (!byBank.has(key)) byBank.set(key, []);
+        byBank.get(key).push(tag);
+      }
+      for (const bank of rows) bank.tags = byBank.get(String(bank.id)) || [];
     }
 
     return { questionBanks: rows, total };

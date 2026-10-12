@@ -164,21 +164,21 @@ class PracticeSegment {
       [practiceSegmentId]
     );
     
-    // Fetch options for each MCQ question
-    for (const question of rows) {
-      if (question.mcq_question_id) {
-        const [options] = await pool.execute(
-          `SELECT id, text, is_correct, \`order\`, explanation 
-           FROM options 
-           WHERE mcq_multiselect_question_id = ? 
-           ORDER BY \`order\` ASC`,
-          [question.mcq_question_id]
-        );
-        question.options = options;
-      } else {
-        question.options = [];
+    const ids = [...new Set(rows.map(question => question.mcq_question_id).filter(Boolean))];
+    const byQuestion = new Map();
+    if (ids.length) {
+      const [options] = await pool.execute(
+        `SELECT mcq_multiselect_question_id, id, text, is_correct, \`order\`, explanation
+         FROM options WHERE mcq_multiselect_question_id IN (${ids.map(() => '?').join(',')})
+         ORDER BY mcq_multiselect_question_id, \`order\` ASC`, ids
+      );
+      for (const { mcq_multiselect_question_id, ...option } of options) {
+        const key = String(mcq_multiselect_question_id);
+        if (!byQuestion.has(key)) byQuestion.set(key, []);
+        byQuestion.get(key).push(option);
       }
     }
+    for (const question of rows) question.options = byQuestion.get(String(question.mcq_question_id)) || [];
     
     return rows;
   }

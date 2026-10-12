@@ -1,36 +1,15 @@
 const pool = require('../config/db');
+const ensureColumns = require('../utils/ensureColumns');
 
 class Institution {
   static async ensureDetailColumns() {
-    if (this._detailColumnsReady) return;
-
-    const statements = [
-      'ALTER TABLE institutions ADD COLUMN address TEXT NULL AFTER name',
-      'ALTER TABLE institutions ADD COLUMN spoc_contact_number VARCHAR(50) NULL AFTER address',
-      'ALTER TABLE institutions ADD COLUMN alternate_contact VARCHAR(50) NULL AFTER spoc_contact_number',
-      'ALTER TABLE institutions ADD COLUMN alternate_email VARCHAR(255) NULL AFTER alternate_contact',
-      "ALTER TABLE institutions ADD COLUMN status ENUM('active', 'inactive') NOT NULL DEFAULT 'active' AFTER alternate_email"
-    ];
-
-    for (const sql of statements) {
-      try {
-        await pool.execute(sql);
-      } catch (error) {
-        if (error.code !== 'ER_DUP_FIELDNAME') {
-          console.warn('Institution column migrate skipped:', error.code, error.sqlMessage || error.message);
-        }
-      }
-    }
-
-    try {
-      await pool.execute('CREATE INDEX idx_institutions_status ON institutions(status)');
-    } catch (error) {
-      if (error.code !== 'ER_DUP_KEYNAME' && error.code !== 'ER_DUP_FIELDNAME') {
-        // Index may already exist
-      }
-    }
-
-    this._detailColumnsReady = true;
+    await ensureColumns(pool, 'institutions', [
+      { name: 'address', definition: 'TEXT NULL' },
+      { name: 'spoc_contact_number', definition: 'VARCHAR(50) NULL' },
+      { name: 'alternate_contact', definition: 'VARCHAR(50) NULL' },
+      { name: 'alternate_email', definition: 'VARCHAR(255) NULL' },
+      { name: 'status', definition: "ENUM('active', 'inactive') NOT NULL DEFAULT 'active'" }
+    ]);
   }
 
   static async create(institutionData) {
@@ -93,16 +72,14 @@ class Institution {
       params.push(`%${search}%`);
     }
 
-    query += ' ORDER BY name ASC';
-
     // Get total count
     const countQuery = query.replace('SELECT *', 'SELECT COUNT(*) as total');
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
-
     // Get paginated results
-    query += ` LIMIT ${limit} OFFSET ${offset}`;
-    const [rows] = await pool.execute(query, params);
+    const pageSize = Math.max(1, Math.min(1000, Number.parseInt(limit, 10) || 10));
+    const start = Math.max(0, Number.parseInt(offset, 10) || 0);
+    query += ` ORDER BY name ASC, id ASC LIMIT ${pageSize} OFFSET ${start}`;
+    const [[rows], [countRows]] = await Promise.all([pool.execute(query, params), pool.execute(countQuery, params)]);
+    const total = countRows[0].total;
 
     return {
       institutions: rows,

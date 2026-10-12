@@ -6,52 +6,9 @@ class ProgrammingSubmission {
    * Ensure assessment columns exist in programming_submissions table
    */
   static async ensureAssessmentColumns() {
-    const columnsToAdd = [
-      { name: 'assessment_user_mapping_id', definition: 'INT DEFAULT NULL' },
-      { name: 'assessment_segment_id', definition: 'INT DEFAULT NULL' },
-      { name: 'execution_result', definition: 'JSON DEFAULT NULL' }
-    ];
-
-    // Ensure status enum includes 'attempted'
-    try {
-      await pool.execute(`ALTER TABLE programming_submissions MODIFY COLUMN status ENUM('pending', 'running', 'completed', 'error', 'attempted') DEFAULT 'pending'`);
-      console.log("Updated status enum in programming_submissions");
-    } catch (e) {
-      console.error("Error updating status enum in programming_submissions:", e.message);
-    }
-
-    for (const col of columnsToAdd) {
-      try {
-        await pool.execute(`ALTER TABLE programming_submissions ADD COLUMN ${col.name} ${col.definition}`);
-        console.log(`Added column ${col.name} to programming_submissions`);
-      } catch (e) {
-        // Column already exists - ignore
-      }
-    }
-
-    // Make submission_id nullable for assessment-based submissions
-    try {
-      await pool.execute(`ALTER TABLE programming_submissions MODIFY COLUMN submission_id INT DEFAULT NULL`);
-    } catch (e) { /* May fail if constraint exists */ }
-
-    // Drop foreign key constraint if it exists (for assessment submissions that don't need it)
-    try {
-      await pool.execute(`ALTER TABLE programming_submissions DROP FOREIGN KEY programming_submissions_ibfk_1`);
-    } catch (e) { /* Constraint may not exist or already dropped */ }
-
-    // Add indexes if they don't exist
-    try {
-      await pool.execute(`ALTER TABLE programming_submissions ADD INDEX idx_assessment_mapping (assessment_user_mapping_id)`);
-    } catch (e) { /* Index may already exist */ }
-    try {
-      await pool.execute(`ALTER TABLE programming_submissions ADD INDEX idx_assessment_segment (assessment_segment_id)`);
-    } catch (e) { /* Index may already exist */ }
+    return require('../utils/ensureProgrammingSchema')(pool);
   }
 
-  /**
-   * Create or update programming submission for assessment
-   * @param {Object} data - submission data for assessment
-   */
   static normalizeSubmissionStatus(status, testCasesPassed = 0, testCasesTotal = 0) {
     if (['pending', 'running', 'completed', 'error', 'attempted'].includes(status)) {
       return status;

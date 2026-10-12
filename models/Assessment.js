@@ -123,6 +123,8 @@ class Assessment {
    * Get all assessments with pagination and filters
    */
   static async getAllPaginated({ search, status, institution_id, topic_id, page = 1, pageSize = 10 }) {
+    page = Math.max(1, Number.parseInt(page, 10) || 1);
+    pageSize = Math.max(1, Math.min(1000, Number.parseInt(pageSize, 10) || 10));
     const offset = (page - 1) * pageSize;
     let query = `
       SELECT a.*, 
@@ -160,14 +162,13 @@ class Assessment {
     }
 
     // Get total count
-    const countQuery = query.replace(/SELECT a\.\*[\s\S]*?FROM assessments a/, 'SELECT COUNT(*) as total FROM assessments a');
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
+    const countQuery = 'SELECT COUNT(*) as total FROM assessments a ' + query.slice(query.lastIndexOf('WHERE 1=1'));
 
     // Get paginated results
-    query += ' ORDER BY a.created_at DESC';
+    query += ' ORDER BY a.created_at DESC, a.id DESC';
     query += ` LIMIT ${parseInt(pageSize)} OFFSET ${parseInt(offset)}`;
-    const [rows] = await pool.execute(query, params);
+    const [[rows], [countRows]] = await Promise.all([pool.execute(query, params), pool.execute(countQuery, params)]);
+    const total = countRows[0].total;
 
     return {
       assessments: rows,
@@ -293,16 +294,19 @@ class Assessment {
     const AssessmentSegment = require('./AssessmentSegment');
     const segments = await AssessmentSegment.getByAssessmentId(id);
     
-    // Get questions for each segment
-    for (const segment of segments) {
-      const segmentWithQuestions = await AssessmentSegment.getWithQuestions(segment.id);
-      if (segmentWithQuestions) {
-        segment.programming_questions = segmentWithQuestions.programming_questions || [];
-        segment.mcq_questions = segmentWithQuestions.mcq_questions || [];
-      } else {
-        segment.programming_questions = [];
-        segment.mcq_questions = [];
+    const { programmingQuestions, mcqQuestions } = await AssessmentSegment.getQuestionsBySegmentIds(segments.map(segment => segment.id));
+    const programmingBySegment = new Map();
+    const mcqBySegment = new Map();
+    for (const [questions, grouped] of [[programmingQuestions, programmingBySegment], [mcqQuestions, mcqBySegment]]) {
+      for (const question of questions) {
+        const key = String(question.assessment_segment_id);
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(question);
       }
+    }
+    for (const segment of segments) {
+      segment.programming_questions = programmingBySegment.get(String(segment.id)) || [];
+      segment.mcq_questions = mcqBySegment.get(String(segment.id)) || [];
     }
 
     assessment.segments = segments;

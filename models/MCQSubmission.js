@@ -6,50 +6,9 @@ class MCQSubmission {
    * Ensure assessment columns exist in mcq_submissions table
    */
   static async ensureAssessmentColumns() {
-    const columnsToAdd = [
-      { name: 'assessment_user_mapping_id', definition: 'INT DEFAULT NULL' },
-      { name: 'assessment_segment_id', definition: 'INT DEFAULT NULL' }
-    ];
-
-    // Ensure status enum includes 'attempted'
-    try {
-      await pool.execute(`ALTER TABLE mcq_submissions MODIFY COLUMN status ENUM('unanswered', 'answered', 'skipped', 'attempted') DEFAULT 'unanswered'`);
-      console.log("Updated status enum in mcq_submissions");
-    } catch (e) {
-      console.error("Error updating status enum in mcq_submissions:", e.message);
-    }
-
-    for (const col of columnsToAdd) {
-      try {
-        await pool.execute(`ALTER TABLE mcq_submissions ADD COLUMN ${col.name} ${col.definition}`);
-        console.log(`Added column ${col.name} to mcq_submissions`);
-      } catch (e) {
-        // Column already exists - ignore
-      }
-    }
-
-    // Make submission_id nullable for assessment-based submissions
-    try {
-      await pool.execute(`ALTER TABLE mcq_submissions MODIFY COLUMN submission_id INT DEFAULT NULL`);
-    } catch (e) { /* May fail if constraint exists */ }
-
-    // Drop foreign key constraint if it exists (for assessment submissions that don't need it)
-    try {
-      await pool.execute(`ALTER TABLE mcq_submissions DROP FOREIGN KEY mcq_submissions_ibfk_1`);
-    } catch (e) { /* Constraint may not exist or already dropped */ }
-
-    // Add indexes if they don't exist
-    try {
-      await pool.execute(`ALTER TABLE mcq_submissions ADD INDEX idx_assessment_mapping (assessment_user_mapping_id)`);
-    } catch (e) { /* Index may already exist */ }
-    try {
-      await pool.execute(`ALTER TABLE mcq_submissions ADD INDEX idx_assessment_segment (assessment_segment_id)`);
-    } catch (e) { /* Index may already exist */ }
+    return require('../utils/ensureProgrammingSchema')(pool, 'mcq_submissions');
   }
 
-  /**
-   * Resolve mcq_question_id to base questions.id (handles mcq_multiselect_questions.id input)
-   */
   static async resolveQuestionId(mcq_question_id) {
     const [rows] = await pool.execute(
       'SELECT question_id FROM mcq_multiselect_questions WHERE id = ?',

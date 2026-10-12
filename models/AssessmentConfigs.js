@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const ensureColumns = require('../utils/ensureColumns');
 const {
   resolveProgrammingObtainedScore,
   buildMcqScoreByOwner,
@@ -85,9 +86,7 @@ class ProctoringConfig {
       )
     `;
     await pool.execute(sql);
-    try {
-      await pool.execute(`ALTER TABLE proctoring_configs ADD COLUMN allow_segment_switch BOOLEAN DEFAULT TRUE`);
-    } catch (e) { /* Column may already exist */ }
+    await ensureColumns(pool, 'proctoring_configs', [{ name: 'allow_segment_switch', definition: 'BOOLEAN DEFAULT TRUE' }]);
   }
 
   static async findByAdminId(assessment_administrator_id) {
@@ -99,9 +98,7 @@ class ProctoringConfig {
   }
 
   static async update(assessment_administrator_id, data) {
-    try {
-      await pool.execute(`ALTER TABLE proctoring_configs ADD COLUMN allow_segment_switch BOOLEAN DEFAULT TRUE`);
-    } catch (e) { /* Column may already exist */ }
+    await ensureColumns(pool, 'proctoring_configs', [{ name: 'allow_segment_switch', definition: 'BOOLEAN DEFAULT TRUE' }]);
     await pool.execute(
       `UPDATE proctoring_configs SET
          proctoring_enabled = COALESCE(?, proctoring_enabled),

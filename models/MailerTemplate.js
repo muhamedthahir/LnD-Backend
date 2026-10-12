@@ -183,16 +183,14 @@ class MailerTemplate {
       params.push(is_active === 'true' || is_active === true ? 1 : 0);
     }
 
-    query += ' ORDER BY priority DESC, name ASC';
-
     // Get total count
     const countQuery = query.replace('SELECT *', 'SELECT COUNT(*) as total');
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
-
     // Get paginated results
-    query += ` LIMIT ${limit} OFFSET ${offset}`;
-    const [rows] = await pool.execute(query, params);
+    const pageSize = Math.max(1, Math.min(1000, Number.parseInt(limit, 10) || 10));
+    const start = Math.max(0, Number.parseInt(offset, 10) || 0);
+    query += ` ORDER BY priority DESC, name ASC, id ASC LIMIT ${pageSize} OFFSET ${start}`;
+    const [[rows], [countRows]] = await Promise.all([pool.execute(query, params), pool.execute(countQuery, params)]);
+    const total = countRows[0].total;
 
     // Parse JSON fields
     const templates = rows.map(row => ({

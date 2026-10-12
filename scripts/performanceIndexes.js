@@ -26,7 +26,17 @@ const indexes = [
   ['assessment_user_mappings', 'idx_aum_admin_status_created', ['assessment_administrator_id', 'status', 'created_at']],
   ['assessment_user_mappings', 'idx_aum_admin_user_attempt', ['assessment_administrator_id', 'user_id', 'attempt_number']],
   ['user_question_assignments', 'idx_uqa_mapping_segment', ['assessment_user_mapping_id', 'assessment_segment_id']],
-  ['random_fetch_criteria', 'idx_rfc_segment_active', ['assessment_segment_id', 'is_active']]
+  ['random_fetch_criteria', 'idx_rfc_segment_active', ['assessment_segment_id', 'is_active']],
+  ['question_bank_tags', 'idx_qbt_bank_tag', ['question_bank_id', 'tag_id']],
+  ['question_banks', 'idx_qb_institution_created', ['institution_id', 'created_at', 'id']],
+  ['assessments', 'idx_assessment_institution_created', ['institution_id', 'created_at', 'id']],
+  ['assessment_administrators', 'idx_aa_assessment_created', ['assessment_id', 'created_at', 'id']],
+  ['practice_segment_programming_questions', 'idx_pspq_segment_order', ['practice_segment_id', 'order_index']],
+  ['practice_segment_mcq_questions', 'idx_psmq_segment_order', ['practice_segment_id', 'order_index']],
+  ['mcq_submissions', 'idx_mcq_mapping_segment', ['assessment_user_mapping_id', 'assessment_segment_id']],
+  ['programming_submissions', 'idx_programming_mapping_segment', ['assessment_user_mapping_id', 'assessment_segment_id']],
+  ['mail_status', 'idx_mail_status_queued', ['status', 'queued_at', 'id']],
+  ['institutions', 'idx_institutions_status', ['status']]
 ];
 
 async function main() {

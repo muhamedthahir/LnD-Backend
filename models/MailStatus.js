@@ -239,18 +239,18 @@ class MailStatus {
     }
 
     // Get total count
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
-
     // Get paginated results
-    query += ' ORDER BY ms.queued_at DESC LIMIT ? OFFSET ?';
-    const [rows] = await pool.execute(query, [...params, limit, offset]);
+    const pageSize = Math.max(1, Math.min(1000, Number.parseInt(limit, 10) || 50));
+    const start = Math.max(0, Number.parseInt(offset, 10) || 0);
+    query += ` ORDER BY ms.queued_at DESC, ms.id DESC LIMIT ${pageSize} OFFSET ${start}`;
+    const [[rows], [countRows]] = await Promise.all([pool.execute(query, params), pool.execute(countQuery, params)]);
+    const total = countRows[0].total;
 
     return {
       records: rows,
       total,
-      limit,
-      offset
+      limit: pageSize,
+      offset: start
     };
   }
 

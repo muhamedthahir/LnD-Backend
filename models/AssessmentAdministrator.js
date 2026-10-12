@@ -407,6 +407,8 @@ class AssessmentAdministrator {
    * Get all administrators with pagination
    */
   static async getAllPaginated({ search, status, assessment_id, page = 1, pageSize = 10 }) {
+    page = Math.max(1, Number.parseInt(page, 10) || 1);
+    pageSize = Math.max(1, Math.min(1000, Number.parseInt(pageSize, 10) || 10));
     const offset = (page - 1) * pageSize;
     let query = `
       SELECT aa.*,
@@ -438,14 +440,13 @@ class AssessmentAdministrator {
     }
 
     // Get total count
-    const countQuery = query.replace(/SELECT aa\.\*[\s\S]*?FROM assessment_administrators aa/, 'SELECT COUNT(*) as total FROM assessment_administrators aa');
-    const [countRows] = await pool.execute(countQuery, params);
-    const total = countRows[0].total;
+    const countQuery = 'SELECT COUNT(*) as total FROM assessment_administrators aa JOIN assessments a ON aa.assessment_id = a.id ' + query.slice(query.lastIndexOf('WHERE 1=1'));
 
     // Get paginated results
-    query += ' ORDER BY aa.created_at DESC';
+    query += ' ORDER BY aa.created_at DESC, aa.id DESC';
     query += ` LIMIT ${parseInt(pageSize)} OFFSET ${parseInt(offset)}`;
-    const [rows] = await pool.execute(query, params);
+    const [[rows], [countRows]] = await Promise.all([pool.execute(query, params), pool.execute(countQuery, params)]);
+    const total = countRows[0].total;
 
     return {
       administrators: rows,
@@ -899,4 +900,3 @@ class AssessmentAdministrator {
 }
 
 module.exports = AssessmentAdministrator;
-

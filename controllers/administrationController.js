@@ -1161,23 +1161,7 @@ class AdministrationController {
       ];
 
       // Question headers: all questions per practice segment (programming + mcq)
-      const questionHeaders = [];
-      for (const seg of practiceSegments) {
-        const [progQ] = await pool.execute(
-          `SELECT q.id, q.name FROM practice_segment_programming_questions pspq
-           JOIN questions q ON q.id = pspq.question_id
-           WHERE pspq.practice_segment_id = ? ORDER BY pspq.order_index`,
-          [seg.id]
-        );
-        const [mcqQ] = await pool.execute(
-          `SELECT q.id, q.name FROM practice_segment_mcq_questions psmq
-           JOIN questions q ON q.id = psmq.question_id
-           WHERE psmq.practice_segment_id = ? ORDER BY psmq.order_index`,
-          [seg.id]
-        );
-        const allQs = [...progQ.map(q => ({ id: q.id, name: q.name, segmentId: seg.id, segmentName: seg.name })), ...mcqQ.map(q => ({ id: q.id, name: q.name, segmentId: seg.id, segmentName: seg.name }))];
-        allQs.forEach(q => questionHeaders.push({ questionId: q.id, questionName: q.name, segmentId: q.segmentId, segmentName: q.segmentName }));
-      }
+      const questionHeaders = await require('../utils/reportQuestionHeaders')(pool, practiceSegments);
 
       const rows = enrolledRows.map((u, idx) => {
         const userProgress = progressByUser[u.user_id] || {};
