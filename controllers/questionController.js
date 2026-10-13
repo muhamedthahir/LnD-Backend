@@ -1,3 +1,4 @@
+const { readWorkbook } = require('../services/spreadsheetImport');
 const Question = require('../models/Question');
 const QuestionType = require('../models/QuestionType');
 const ProgrammingQuestion = require('../models/ProgrammingQuestion');
@@ -576,9 +577,7 @@ class QuestionController {
       const currentUser = req.user;
       const userId = currentUser?.id;
       
-      if (!req.file) {
-        return res.status(400).json({ error: 'Excel file is required' });
-      }
+      const uploadBuffer = await readWorkbook(req, 'mcq');
 
       // Get MCQ question type
       const mcqType = await QuestionType.findByName('MCQ');
@@ -593,7 +592,7 @@ class QuestionController {
       }
 
       // Parse Excel file
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const workbook = XLSX.read(uploadBuffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
@@ -813,7 +812,7 @@ class QuestionController {
 
     } catch (error) {
       console.error('Bulk upload MCQ error:', error);
-      res.status(500).json({ error: 'Internal server error', details: error.message });
+      res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Internal server error', details: error.message });
     }
   }
 
@@ -911,9 +910,7 @@ class QuestionController {
       const currentUser = req.user;
       const userId = currentUser?.id;
 
-      if (!req.file) {
-        return res.status(400).json({ error: 'Excel file is required' });
-      }
+      const uploadBuffer = await readWorkbook(req, 'programming');
 
       // Get Programming question type
       const programmingType = await QuestionType.findByName('Programming');
@@ -928,7 +925,7 @@ class QuestionController {
       }
 
       // Parse Excel file
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const workbook = XLSX.read(uploadBuffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
@@ -1194,7 +1191,7 @@ class QuestionController {
 
     } catch (error) {
       console.error('Bulk upload Programming error:', error);
-      res.status(500).json({ error: 'Internal server error', details: error.message });
+      res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Internal server error', details: error.message });
     }
   }
 }

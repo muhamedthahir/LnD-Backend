@@ -1,3 +1,4 @@
+const { readWorkbook } = require('../services/spreadsheetImport');
 const TestCase = require('../models/TestCase');
 const ProgrammingQuestion = require('../models/ProgrammingQuestion');
 const XLSX = require('xlsx');
@@ -265,16 +266,14 @@ class TestCaseController {
     try {
       const { programming_question_id } = req.params;
 
-      if (!req.file) {
-        return res.status(400).json({ error: 'Excel file is required' });
-      }
+      const uploadBuffer = await readWorkbook(req, 'testcases');
 
       const progQuestion = await ProgrammingQuestion.findById(programming_question_id);
       if (!progQuestion) {
         return res.status(404).json({ error: 'Programming question not found' });
       }
 
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const workbook = XLSX.read(uploadBuffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
@@ -359,7 +358,7 @@ class TestCaseController {
       });
     } catch (error) {
       console.error('Bulk upload test cases error:', error);
-      res.status(500).json({ error: 'Internal server error', details: error.message });
+      res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Internal server error', details: error.message });
     }
   }
 }

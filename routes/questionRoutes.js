@@ -35,6 +35,9 @@ router.delete('/:id', authenticate, authorize('primary_admin', 'college_admin'),
 router.post('/:id/add-to-bank', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.addToQuestionBank);
 router.post('/:id/remove-from-bank', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.removeFromQuestionBank);
 
+// Small authenticated request prepares a direct-to-S3 workbook upload.
+router.post('/bulk-upload/file', authenticate, authorize('primary_admin', 'college_admin'), require('../controllers/spreadsheetImportController').prepare);
+
 // Bulk upload for MCQ questions
 router.get('/bulk-upload/mcq/template', authenticate, authorize('primary_admin', 'college_admin'), QuestionController.downloadBulkMcqTemplate);
 router.post('/bulk-upload/mcq', authenticate, authorize('primary_admin', 'college_admin'), upload.single('file'), QuestionController.uploadBulkMcqQuestions);
