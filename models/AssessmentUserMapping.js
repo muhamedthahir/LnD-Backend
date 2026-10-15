@@ -15,7 +15,7 @@ class AssessmentUserMapping {
         id INT AUTO_INCREMENT PRIMARY KEY,
         unique_id VARCHAR(50) UNIQUE NOT NULL,
         assessment_administrator_id INT NOT NULL,
-      user_id INT NOT NULL,ass
+        user_id INT NOT NULL,
         status ENUM('INVITED', 'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'ABANDONED', 'EXPIRED', 'DISQUALIFIED') DEFAULT 'INVITED',
         attempt_number INT DEFAULT 1,
         mail_sent_at DATETIME DEFAULT NULL,
@@ -224,6 +224,7 @@ class AssessmentUserMapping {
       FROM assessment_user_mappings aum
       JOIN users u ON aum.user_id = u.id
       WHERE aum.assessment_administrator_id = ?
+        AND aum.attempt_number = (SELECT MAX(latest.attempt_number) FROM assessment_user_mappings latest WHERE latest.assessment_administrator_id = aum.assessment_administrator_id AND latest.user_id = aum.user_id)
     `;
     const params = [assessment_administrator_id];
 
@@ -237,8 +238,8 @@ class AssessmentUserMapping {
         query += ' AND aum.status IN (?, ?, ?)';
         params.push('COMPLETED', 'SUBMITTED', 'DISQUALIFIED');
       } else if (status === 'pending') {
-        query += ' AND aum.status = ?';
-        params.push('NOT_STARTED');
+        query += ' AND aum.status IN (?, ?, ?)';
+        params.push('NOT_STARTED', 'INVITED', 'PENDING');
       } else if (status === 'inprogress') {
         query += ' AND aum.status = ?';
         params.push('IN_PROGRESS');
@@ -259,7 +260,9 @@ class AssessmentUserMapping {
     // Get paginated results
     query += ' ORDER BY aum.created_at DESC';
     query += ` LIMIT ${parseInt(pageSize)} OFFSET ${parseInt(offset)}`;
-    const [rows] = await pool.execute(query, params);
+    const [latestRows] = await pool.execute(query, params);
+    const userIds = latestRows.map(row => row.user_id);
+    const [rows] = userIds.length ? await pool.execute(`SELECT aum.*, u.name as user_name, u.email as user_email FROM assessment_user_mappings aum JOIN users u ON aum.user_id = u.id WHERE aum.assessment_administrator_id = ? AND aum.user_id IN (${userIds.map(() => '?').join(',')}) ORDER BY aum.created_at DESC`, [assessment_administrator_id, ...userIds]) : [[]];
 
     const mappings = rows.map(row => ({
       ...row,
@@ -1032,7 +1035,7 @@ class AssessmentUserMapping {
       [mapping.assessment_administrator_id]
     );
 
-    const threshold = scoringConfig[0]?.threshold_for_pass || 40;
+    const threshold = scoringConfig[0]?.threshold_for_pass ?? 40;
     const thresholdType = scoringConfig[0]?.threshold_type || 'PERCENTAGE';
     
     let passed = false;
@@ -1042,6 +1045,7 @@ class AssessmentUserMapping {
       passed = scores.total_score >= threshold;
     }
 
+    await pool.execute(`UPDATE assessment_segment_progress SET status = 'COMPLETED', completed_at = COALESCE(completed_at, NOW()) WHERE assessment_user_mapping_id = ? AND status = 'IN_PROGRESS'`, [id]);
     await pool.execute(
       `UPDATE assessment_user_mappings SET
          status = 'COMPLETED',
@@ -1645,4 +1649,3 @@ class AssessmentUserMapping {
 }
 
 module.exports = AssessmentUserMapping;
-

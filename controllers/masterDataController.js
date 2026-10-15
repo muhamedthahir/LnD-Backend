@@ -7,6 +7,7 @@ const Tag = require('../models/Tag');
 const UserRole = require('../models/UserRole');
 const Department = require('../models/Department');
 const Degree = require('../models/Degree');
+const { isPlatformAdmin } = require('../utils/roles');
 
 class MasterDataController {
   // ==================== GET ALL ====================
@@ -247,7 +248,8 @@ class MasterDataController {
   
   static async getLanguages(req, res) {
     try {
-      const languages = await Language.getAll();
+      const includeInactive = req.query.includeInactive === 'true' && isPlatformAdmin(req.user?.role);
+      const languages = await (includeInactive ? Language.getAllIncludingInactive() : Language.getAll());
       res.json({ languages });
     } catch (error) {
       console.error('Get languages error:', error);
@@ -315,7 +317,8 @@ class MasterDataController {
   
   static async getCategories(req, res) {
     try {
-      const categories = await Category.getAllWithHierarchy();
+      const includeInactive = req.query.includeInactive === 'true' && isPlatformAdmin(req.user?.role);
+      const categories = await Category.getAllWithHierarchy(includeInactive);
       res.json({ categories });
     } catch (error) {
       console.error('Get categories error:', error);

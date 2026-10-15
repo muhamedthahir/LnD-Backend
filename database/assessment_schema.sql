@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS segment_programming_questions (
     programming_question_id INT NOT NULL,
     sequence_order INT NOT NULL DEFAULT 1,
     weightage_override INT DEFAULT NULL COMMENT 'Override question default weightage',
+    positive_marks DECIMAL(10,2) DEFAULT NULL,
+    negative_marks DECIMAL(10,2) DEFAULT NULL,
+    neutral_marks DECIMAL(10,2) DEFAULT NULL,
     is_mandatory BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
@@ -87,6 +90,9 @@ CREATE TABLE IF NOT EXISTS segment_mcq_questions (
     mcq_question_id INT NOT NULL,
     sequence_order INT NOT NULL DEFAULT 1,
     weightage_override INT DEFAULT NULL COMMENT 'Override question default weightage',
+    positive_marks DECIMAL(10,2) DEFAULT NULL,
+    negative_marks DECIMAL(10,2) DEFAULT NULL,
+    neutral_marks DECIMAL(10,2) DEFAULT NULL,
     is_mandatory BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     

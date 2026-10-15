@@ -2146,6 +2146,8 @@ const getAssessmentTake = async (req, res) => {
         ...q,
         question_type: q.question_type || (q.programming_question_id ? 'PROGRAMMING' : 'MCQ')
       })),
+      display_name: admin.display_name,
+      assessment_title: mapping.assessment_title,
       time_remaining: actualTimeRemaining,
       segment_time_remaining: actualSegmentTimeRemaining,
       total_time_worked: mapping.total_time_worked || 0,
@@ -2313,6 +2315,11 @@ const submitFeedback = async (req, res) => {
   try {
     const { mapping_id } = req.params;
     const { rating, comment } = req.body;
+    const mapping = await AssessmentUserMapping.findById(mapping_id);
+    if (!mapping) return res.status(404).json({ error: 'Assessment not found' });
+    if (Number(mapping.user_id) !== Number(req.user.id)) return res.status(403).json({ error: 'Access denied' });
+    if (!['COMPLETED', 'SUBMITTED'].includes(mapping.status)) return res.status(400).json({ error: 'Complete the assessment before submitting feedback' });
+    if (!Number.isInteger(Number(rating)) || Number(rating) < 1 || Number(rating) > 5) return res.status(400).json({ error: 'Rating must be between 1 and 5' });
 
     await AssessmentUserMapping.submitFeedback(mapping_id, { rating, comment });
     res.json({ message: 'Feedback submitted successfully' });
@@ -2343,7 +2350,8 @@ const getAssessmentResult = async (req, res) => {
 
     // Get scoring config to check if results should be shown
     const scoringConfig = await ScoringConfig.findByAdminId(mapping.assessment_administrator_id);
-    if (!scoringConfig?.show_score_at_end && !isAdmin) {
+    const { isReleased } = require('../utils/resultRelease');
+    if (!isAdmin && (!['COMPLETED', 'SUBMITTED', 'DISQUALIFIED'].includes(mapping.status) || !isReleased(scoringConfig?.show_score_at_end, scoringConfig?.show_score_scheduled_time))) {
       return res.status(403).json({ error: 'Results are not available' });
     }
 
@@ -2492,9 +2500,42 @@ const getAssessmentResult = async (req, res) => {
     const derivedMaxScore = detailedSegmentProgress.reduce((sum, seg) => sum + (Number(seg.max_score) || 0), 0);
     const derivedPercentage = derivedMaxScore > 0 ? (derivedTotalScore / derivedMaxScore * 100) : 0;
 
+    if (!isAdmin) {
+      const questions = detailedSegmentProgress.flatMap(segment => segment.questions || []);
+      const threshold = Number(scoringConfig?.threshold_for_pass ?? 40);
+      const showAnswers = isReleased(scoringConfig?.show_correct_answers_after, scoringConfig?.show_answers_scheduled_time);
+      const correctAnswerText = {};
+      const mcqIds = showAnswers ? questions.filter(question => question.question_type === 'MCQ').map(question => question.question_id) : [];
+      if (mcqIds.length) {
+        const [options] = await pool.execute(`SELECT mcq_multiselect_question_id, text FROM options WHERE is_correct = 1 AND mcq_multiselect_question_id IN (${mcqIds.map(() => '?').join(',')}) ORDER BY id`, mcqIds);
+        for (const option of options) (correctAnswerText[option.mcq_multiselect_question_id] ||= []).push(stripHtml(option.text));
+      }
+      const isCorrect = question => Number(question.weightage) > 0 && Number(question.score) >= Number(question.weightage);
+      return res.json({
+        display_name: mapping.administrator_name,
+        assessment_title: mapping.assessment_title,
+        score: derivedPercentage,
+        passed: (scoringConfig?.threshold_type === 'ABSOLUTE_SCORE' ? derivedTotalScore : derivedPercentage) >= threshold,
+        threshold_for_pass: threshold,
+        total_questions: questions.length,
+        correct_answers: questions.filter(isCorrect).length,
+        attempted: questions.filter(question => question.is_attempted).length,
+        marks_obtained: derivedTotalScore,
+        total_marks: derivedMaxScore,
+        time_taken: Number(mapping.total_time_worked) || 0,
+        show_feedback: Boolean(scoringConfig?.show_feedback_or_rating),
+        feedback_submitted: mapping.feedback_rating != null,
+        segments: detailedSegmentProgress.map(segment => ({id:segment.assessment_segment_id,name:segment.segment_name || segmentMap[segment.assessment_segment_id],percentage:segment.max_score > 0 ? segment.score / segment.max_score * 100 : 0,correct:segment.questions.filter(isCorrect).length,total:segment.total_questions,marks_obtained:segment.score,total_marks:segment.max_score})),
+        show_answers: showAnswers,
+        answers: showAnswers ? questions.map(question => ({question_text:question.question_title || question.question_name || question.name,user_answer:question.user_answer,is_correct:isCorrect(question),correct_answer:correctAnswerText[question.question_id]?.join(', ')})) : undefined
+      });
+    }
+
     res.json({
       mapping: {
         ...mapping,
+        attempts_used: mapping.attempt_number,
+        max_attempts: (await AccessConfig.findByAdminId(mapping.assessment_administrator_id))?.max_attempts ?? 1,
         total_score: derivedTotalScore,
         percentage_score: parseFloat(derivedPercentage.toFixed(2)),
         refresh_violation_count: refreshViolationCount,
@@ -2580,6 +2621,7 @@ const saveAnswer = async (req, res) => {
     let isCorrect = null;
     let score = null;
     let timeToSolve = null; // configured expected time for this question (seconds), if any
+    let questionWeight = 0;
 
     // For MCQ, calculate if the answer is correct
     if (question_type === 'MCQ' && answer) {
@@ -2626,7 +2668,7 @@ const saveAnswer = async (req, res) => {
          LIMIT 1`,
         [mapping_id, question_id]
       );
-      const questionWeight = parseFloat(assignRows[0]?.weightage) || marks;
+      questionWeight = parseFloat(assignRows[0]?.weightage) || marks;
 
       // Calculate score using configured question weight
       if (isCorrect) {
@@ -3471,4 +3513,3 @@ module.exports = {
   updateRandomFetchCriteria,
   deleteRandomFetchCriteria
 };
-

@@ -8,12 +8,12 @@ class Category {
     return rows;
   }
 
-  static async getAllWithHierarchy() {
+  static async getAllWithHierarchy(includeInactive = false) {
     const [rows] = await pool.execute(
       `SELECT c.*, p.name as parent_name 
        FROM categories c 
        LEFT JOIN categories p ON c.parent_id = p.id 
-       WHERE c.active = TRUE 
+       ${includeInactive ? '' : 'WHERE c.active = TRUE'}
        ORDER BY c.name ASC`
     );
     return rows;

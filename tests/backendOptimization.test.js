@@ -80,8 +80,31 @@ for (const table of ['programming_submissions', 'mcq_submissions']) test(`${tabl
   } };
   await Promise.all(Array.from({ length: 20 }, () => ensureSchema(db, table)));
   await ensureSchema(db, table);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   assert.ok(!calls.some(sql => sql.startsWith('ALTER')));
+});
+
+for (const table of ['programming_submissions', 'mcq_submissions']) test(`${table} replaces global uniqueness with practice and assessment context keys`, async () => {
+  const calls = [];
+  const question = table === 'mcq_submissions' ? 'mcq_question_id' : 'programming_question_id';
+  const legacy = table === 'mcq_submissions' ? 'unique_user_mcq_question' : 'unique_user_programming_question';
+  const db = { execute: async sql => {
+    calls.push(sql);
+    if (sql.startsWith('SHOW COLUMNS')) return [[
+      { Field: 'assessment_user_mapping_id' }, { Field: 'assessment_segment_id' }, { Field: 'execution_result' },
+      { Field: 'status', Type: "enum('attempted')" }
+    ]];
+    if (sql.startsWith('SHOW INDEX')) return [[{ Key_name: legacy }]];
+    return [[]];
+  } };
+  await Promise.all([ensureSchema(db, table), ensureSchema(db, table)]);
+  await ensureSchema(db, table);
+  const changes = calls.filter(sql => sql.startsWith('ALTER'));
+  assert.deepEqual(changes, [
+    `ALTER TABLE ${table} ADD UNIQUE KEY unique_practice_question (user_id, ${question}, practice_segment_id)`,
+    `ALTER TABLE ${table} ADD UNIQUE KEY unique_assessment_question (user_id, ${question}, assessment_user_mapping_id)`,
+    `ALTER TABLE ${table} DROP INDEX ${legacy}`
+  ]);
 });
 test('failed submission compatibility check retries and only changes missing properties', async () => {
   let failed = false;

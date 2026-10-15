@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const serializeTags = tags => JSON.stringify(Array.isArray(tags) ? tags : typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()).filter(Boolean) : []);
 
 class Course {
   static async create(courseData) {
@@ -10,6 +11,7 @@ class Course {
       course_outcomes, 
       status,
       thumbnail,
+      tags,
       has_to_go_by_section,
       created_by 
     } = courseData;
@@ -23,9 +25,10 @@ class Course {
         course_outcomes, 
         status,
         thumbnail,
+        tags,
         has_to_go_by_section,
         created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name, 
         category, 
@@ -34,6 +37,7 @@ class Course {
         course_outcomes, 
         status || 'draft',
         thumbnail || null,
+        serializeTags(tags),
         has_to_go_by_section ? 1 : 0,
         created_by
       ]
@@ -199,6 +203,7 @@ class Course {
       course_outcomes, 
       status,
       thumbnail,
+      tags,
       has_to_go_by_section
     } = courseData;
     
@@ -232,6 +237,10 @@ class Course {
     if (thumbnail !== undefined) {
       updates.push('thumbnail = ?');
       values.push(thumbnail);
+    }
+    if (tags !== undefined) {
+      updates.push('tags = ?');
+      values.push(serializeTags(tags));
     }
     if (has_to_go_by_section !== undefined) {
       updates.push('has_to_go_by_section = ?');

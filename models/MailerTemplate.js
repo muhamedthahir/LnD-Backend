@@ -120,7 +120,7 @@ class MailerTemplate {
   static safeJsonParse(value, defaultValue = []) {
     if (!value || value === '' || value === 'null') return defaultValue;
     try {
-      return JSON.parse(value);
+      return typeof value === 'string' ? JSON.parse(value) : value;
     } catch (e) {
       return defaultValue;
     }

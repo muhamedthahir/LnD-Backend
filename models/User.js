@@ -271,10 +271,13 @@ class User {
           name: rows[0].name,
           email: rows[0].email,
           role: rows[0].role,
+          role_id: rows[0].role_id ?? null,
           college_name: rows[0].college_name || null,
           roll_number: rows[0].roll_number || null,
           department: rows[0].department || null,
           section: rows[0].section || '1',
+          degree: rows[0].degree || null,
+          password_set: Boolean(rows[0].password_set),
           created_at: rows[0].created_at
         };
       }
@@ -292,6 +295,8 @@ class User {
             ...rows[0],
             roll_number: null,
             department: null,
+            degree: null,
+            password_set: false,
             section: '1'
           };
         }

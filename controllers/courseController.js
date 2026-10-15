@@ -22,6 +22,7 @@ class CourseController {
         course_outcomes, 
         status,
         thumbnail,
+        tags,
         has_to_go_by_section
       } = req.body;
       
@@ -37,6 +38,7 @@ class CourseController {
         course_outcomes,
         status: status || 'draft',
         thumbnail,
+        tags,
         has_to_go_by_section: has_to_go_by_section || false,
         created_by: req.user.id
       });
@@ -128,6 +130,7 @@ class CourseController {
         course_outcomes, 
         status,
         thumbnail,
+        tags,
         has_to_go_by_section
       } = req.body;
 
@@ -152,6 +155,7 @@ class CourseController {
         course_outcomes, 
         status,
         thumbnail,
+        tags,
         has_to_go_by_section
       });
       const updatedCourse = await Course.findById(id);

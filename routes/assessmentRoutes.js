@@ -51,6 +51,7 @@ router.post('/administrators/invite', authenticate, authorize('primary_admin', '
 router.get('/administrators/:administrator_id/users', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.getUserMappings);
 router.get('/administrators/:administrator_id/report', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.downloadAssessmentReport);
 router.get('/mappings/:mapping_id/result', authenticate, assessmentController.getAssessmentResult);
+router.get('/user/assessments/:mapping_id/results', authenticate, assessmentController.getAssessmentResult);
 router.post('/administrators/:administrator_id/allow-reattempt-all', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattemptForAll);
 router.post('/administrators/:administrator_id/regrade-saved-code', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.regradeSavedCodeForAdministrator);
 router.post('/user-mappings/:mapping_id/allow-reattempt', authenticate, authorize('primary_admin', 'college_admin'), assessmentController.allowReattempt);
@@ -111,6 +112,6 @@ router.post('/user/assessments/:mapping_id/switch-segment', authenticate, assess
 
 // Submit Feedback
 router.post('/take/:mapping_id/feedback', authenticate, assessmentController.submitFeedback);
+router.post('/user/assessments/:mapping_id/feedback', authenticate, assessmentController.submitFeedback);
 
 module.exports = router;
-
