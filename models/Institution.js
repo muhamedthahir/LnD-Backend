@@ -156,21 +156,37 @@ class Institution {
   }
 
   static async delete(id) {
-    // Check if institution has users
-    const [userRows] = await pool.execute(
-      'SELECT COUNT(*) as count FROM users WHERE college_name = (SELECT name FROM institutions WHERE id = ?)',
-      [id]
-    );
-
-    if (userRows[0].count > 0) {
-      throw new Error('Cannot delete institution with existing users');
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [institutions] = await connection.execute(
+        'SELECT name FROM institutions WHERE id = ? FOR UPDATE',
+        [id]
+      );
+      if (institutions.length === 0) {
+        throw new Error('Institution not found');
+      }
+      const name = institutions[0].name;
+      const [userRows] = await connection.execute(
+        `SELECT COUNT(*) AS count FROM users WHERE college_name = ? AND role <> 'college_admin'`,
+        [name]
+      );
+      if (userRows[0].count > 0) {
+        throw new Error('Cannot delete institution with existing users');
+      }
+      await connection.execute(
+        `DELETE FROM users WHERE college_name = ? AND role = 'college_admin'`,
+        [name]
+      );
+      await connection.execute('DELETE FROM institutions WHERE id = ?', [id]);
+      await connection.commit();
+      return true;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    await pool.execute(
-      'DELETE FROM institutions WHERE id = ?',
-      [id]
-    );
-    return true;
   }
 
   static async getAdmins(institutionId) {

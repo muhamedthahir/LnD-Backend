@@ -269,7 +269,12 @@ class InstitutionController {
       res.json({ message: 'Institution deleted successfully' });
     } catch (error) {
       console.error('Delete institution error:', error);
-      res.status(500).json({ error: error.message || 'Internal server error' });
+      const known = error.message === 'Institution not found'
+        ? 404
+        : error.message === 'Cannot delete institution with existing users'
+          ? 400
+          : 500;
+      res.status(known).json({ error: error.message || 'Internal server error' });
     }
   }
 
