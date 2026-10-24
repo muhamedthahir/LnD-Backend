@@ -47,11 +47,8 @@ class RefreshToken {
       if (error.code === 'ER_NO_SUCH_TABLE') {
         return null;
       }
-      // Log connection errors but don't throw for ECONNRESET - let it retry
-      if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+      if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST' || error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
         console.error('RefreshToken.findByToken connection error:', error.message);
-        // Return null to allow the auth flow to continue (user will need to re-login)
-        return null;
       }
       throw error;
     }

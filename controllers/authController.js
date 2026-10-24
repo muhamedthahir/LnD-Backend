@@ -7,6 +7,18 @@ const { generateOTP, getOTPExpiration } = require('../utils/otpGenerator');
 const { sendOTPEmail } = require('../utils/emailService');
 const { sendPasswordResetEmail } = require('../services/sesEmailService');
 
+function isDatabaseUnavailable(error) {
+  const code = error?.code || '';
+  return [
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'PROTOCOL_CONNECTION_LOST',
+    'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+    'ER_CON_COUNT_ERROR'
+  ].includes(code);
+}
+
 class AuthController {
   static async register(req, res) {
     try {
@@ -359,8 +371,7 @@ class AuthController {
       try {
         storedToken = await RefreshToken.findByToken(token);
       } catch (error) {
-        // Handle database connection errors
-        if (error.code === 'ECONNRESET' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+        if (isDatabaseUnavailable(error)) {
           console.error('Refresh token error: Database connection issue:', error.message);
           return res.status(503).json({ error: 'Database connection error. Please try again.' });
         }
@@ -402,6 +413,9 @@ class AuthController {
       });
     } catch (error) {
       console.error('Refresh token error:', error);
+      if (isDatabaseUnavailable(error)) {
+        return res.status(503).json({ error: 'Database connection error. Please try again.' });
+      }
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

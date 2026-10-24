@@ -8,7 +8,7 @@ if (!process.env.JWT_SECRET) {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET + '-refresh';
-const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || '15m'; // 15 minutes default
+const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || '8h'; // class sessions outlast 15 minutes
 const REMEMBER_ME_ACCESS_TOKEN_EXPIRES_IN =
   process.env.REMEMBER_ME_ACCESS_TOKEN_EXPIRES_IN || '24h'; // longer access when "Remember me"
 const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d'; // 7 days default
