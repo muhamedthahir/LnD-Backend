@@ -64,12 +64,6 @@ const isOriginAllowed = (origin) => {
   if (!origin) return null;
   const allowed = getAllowedOrigins();
   if (allowed.includes(origin)) return origin;
-  if (
-    origin.includes('localhost:5173') ||
-    origin.includes('cloudfront.net') ||
-    origin.includes('skillvantix.com') ||
-    origin.includes('campuszen.in')
-  ) return origin;
   return null;
 };
 
@@ -89,6 +83,7 @@ const setCorsHeadersFromReq = (req, res) => {
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowedOrigin = isOriginAllowed(origin);
+  req.isTrustedBrowserOrigin = Boolean(allowedOrigin);
 
   const setCorsHeaders = () => {
     if (allowedOrigin) {
@@ -135,8 +130,8 @@ app.use((req, res, next) => {
 });
 
 // Middleware
-app.use(express.json({ limit: '500mb' }));
-app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // Debug middleware to log request details for segment routes
 app.use('/api/segments', (req, res, next) => {
@@ -215,10 +210,7 @@ app.get('/env-test', (req, res) => {
 });
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  console.error('Error name:', err.name);
-  console.error('Error code:', err.code);
-  console.error('Error stack:', err.stack);
+  console.error('Request failed:', err.code || err.type || err.name);
 
   setCorsHeadersFromReq(req, res);
 
@@ -249,7 +241,7 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 // Initialize WebSocket server for interactive code execution
-WebSocketServer.initialize(server);
+WebSocketServer.initialize(server, isOriginAllowed);
 WebSocketServer.startHeartbeat();
 
 // Add WebSocket status endpoint

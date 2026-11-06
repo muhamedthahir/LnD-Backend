@@ -369,9 +369,8 @@ class SegmentProgrammingQuestion {
       [data.assessment_segment_id]
     );
     const [ programming_question_id ] = await pool.execute(
-      `SELECT id from programming_questions where question_id = ${data.question_id}`
+      'SELECT id FROM programming_questions WHERE question_id = ?', [data.question_id]
     )
-    console.log( programming_question_id, data);
     
     // Convert undefined to null for SQL compatibility
     const safeSequenceOrder = data.sequence_order !== undefined ? data.sequence_order : maxOrder[0].next_order
@@ -506,9 +505,8 @@ class SegmentMCQQuestion {
       [data.assessment_segment_id]
     );
     const [ mcq_question_id ] = await pool.execute(
-      `SELECT id from mcq_multiselect_questions where question_id = ${data.question_id}`
+      'SELECT id FROM mcq_multiselect_questions WHERE question_id = ?', [data.question_id]
     )
-    console.log( mcq_question_id, data);
     
     // Convert undefined to null for SQL compatibility
     const safeSequenceOrder = data.sequence_order !== undefined ? data.sequence_order : maxOrder[0].next_order

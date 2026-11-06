@@ -146,7 +146,7 @@ const createAssessment = async (req, res) => {
     const assessment = await Assessment.create({
       title,
       description,
-      institution_id,
+      institution_id: req.assessmentInstitutionId ?? institution_id,
       topic_id,
       created_by: req.user.id
     });
@@ -171,7 +171,7 @@ const getAssessments = async (req, res) => {
     const result = await Assessment.getAllPaginated({
       search,
       status,
-      institution_id,
+      institution_id: req.assessmentInstitutionId ?? institution_id,
       topic_id,
       page: parseInt(page),
       pageSize: parseInt(pageSize)
@@ -223,7 +223,7 @@ const updateAssessment = async (req, res) => {
     await Assessment.update(id, {
       title,
       description,
-      institution_id,
+      institution_id: req.assessmentInstitutionId ?? institution_id,
       topic_id,
       status,
       last_updated_by: req.user.id

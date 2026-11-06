@@ -19,10 +19,23 @@ function isDatabaseUnavailable(error) {
   ].includes(code);
 }
 
+
+const refreshCookie = 'lnd_refresh';
+const refreshCookieOptions = req => {
+  const local = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(req.headers?.origin || '');
+  return { httpOnly: true, secure: !local, sameSite: local ? 'lax' : 'none', path: '/api/auth' };
+};
+const readRefreshCookie = req => (req.headers?.cookie || '').split(';')
+  .map(part => part.trim())
+  .find(part => part.startsWith(refreshCookie + '='))?.slice(refreshCookie.length + 1);
+const refreshRequestAllowed = req => !req.headers?.origin
+  ? !readRefreshCookie(req)
+  : req.isTrustedBrowserOrigin;
+
 class AuthController {
   static async register(req, res) {
     try {
-      const { name, email, password, role, college_name } = req.body;
+      const { name, email, password } = req.body;
 
       if (!name || !email || !password) {
         return res.status(400).json({ error: 'Name, email, and password are required' });
@@ -42,8 +55,8 @@ class AuthController {
         name,
         email,
         password: hashedPassword,
-        role: role || 'student',
-        college_name: college_name || null
+        role: 'student',
+        college_name: null
       });
 
       // Get created user
@@ -66,6 +79,7 @@ class AuthController {
   }
 
   static async login(req, res) {
+    if (req.headers?.origin && !req.isTrustedBrowserOrigin) return res.status(403).json({ error: 'Untrusted session origin' });
     // Set timeout for this specific request (20 seconds)
     const timeoutId = setTimeout(() => {
       if (!res.headersSent) {
@@ -182,10 +196,11 @@ class AuthController {
 
       clearTimeout(timeoutId);
       
+      res.cookie(refreshCookie, refreshToken, { ...refreshCookieOptions(req), expires: refreshTokenExpiration });
       return res.json({
         message: 'Login successful',
         accessToken: accessToken,
-        refreshToken: refreshToken,
+
         user: {
           id: user.id,
           name: user.name,
@@ -309,7 +324,9 @@ class AuthController {
 
   static async logout(req, res) {
     try {
-      const { refreshToken: token } = req.body;
+      if (!refreshRequestAllowed(req)) return res.status(403).json({ error: 'Untrusted session origin' });
+      const cookieToken = readRefreshCookie(req);
+      const token = cookieToken || req.body?.refreshToken;
       
       // Revoke refresh token if provided
       if (token) {
@@ -321,6 +338,7 @@ class AuthController {
         await RefreshToken.revokeAllForUser(req.user.id);
       }
       
+      res.clearCookie(refreshCookie, refreshCookieOptions(req));
       res.json({ message: 'Logout successful' });
     } catch (error) {
       console.error('Logout error:', error);
@@ -360,10 +378,12 @@ class AuthController {
 
   static async refreshToken(req, res) {
     try {
-      const { refreshToken: token } = req.body;
+      if (!refreshRequestAllowed(req)) return res.status(403).json({ error: 'Untrusted session origin' });
+      const cookieToken = readRefreshCookie(req);
+      const token = cookieToken || req.body?.refreshToken;
 
       if (!token) {
-        return res.status(400).json({ error: 'Refresh token is required' });
+        return res.status(401).json({ error: 'Refresh token is required' });
       }
 
       // Find refresh token in database
@@ -397,6 +417,9 @@ class AuthController {
       const daysLeft = (expMs - Date.now()) / (86400000)
       const extendedRefreshSession = daysLeft > 14
       const accessToken = generateAccessToken(user, extendedRefreshSession)
+      if (!cookieToken && req.isTrustedBrowserOrigin) {
+        res.cookie(refreshCookie, token, { ...refreshCookieOptions(req), expires: new Date(storedToken.expires_at) });
+      }
 
       return res.json({
         accessToken,

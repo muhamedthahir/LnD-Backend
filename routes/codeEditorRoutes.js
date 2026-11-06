@@ -1,14 +1,28 @@
-// codeEditorRoutes.js
 const express = require('express');
-const router = express.Router();
 const { executeCode, getRuntimes } = require('../controllers/codeEditorController');
+const { authenticate } = require('../middleware/auth');
+const requestBudget = require('../middleware/requestBudget');
 
-// POST /api/codeExecute - Execute code using Piston API
-// No authentication required for now
-router.post('/', executeCode);
+const router = express.Router();
+const running = new Map();
+const executionBudget = requestBudget(120, 60000, req => req.user.id);
 
-// GET /api/codeExecute/runtimes - Get available language runtimes
+router.post('/', authenticate, executionBudget, async (req, res, next) => {
+  const id = req.user.id;
+  const count = running.get(id) || 0;
+  if (count >= 2 || (running.size >= 100 && !running.has(id))) {
+    return res.status(429).json({ error: 'Execution capacity reached. Try again shortly.' });
+  }
+  running.set(id, count + 1);
+  try {
+    await executeCode(req, res, next);
+  } finally {
+    const remaining = running.get(id) - 1;
+    if (remaining) running.set(id, remaining);
+    else running.delete(id);
+  }
+});
+
 router.get('/runtimes', getRuntimes);
 
 module.exports = router;
-

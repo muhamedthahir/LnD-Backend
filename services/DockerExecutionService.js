@@ -167,8 +167,7 @@ class DockerExecutionService extends EventEmitter {
    */
   buildSshArgs() {
     const sshArgs = [
-      '-o', 'StrictHostKeyChecking=no',
-      '-o', 'UserKnownHostsFile=/dev/null',
+      '-o', 'StrictHostKeyChecking=yes',
       '-o', 'LogLevel=ERROR',
       '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=3',
@@ -199,16 +198,6 @@ class DockerExecutionService extends EventEmitter {
       const containerInfo = await this.createContainer(sessionId, language, code);
       const config = containerInfo.config;
       
-      // Escape code for shell - handle special characters for SSH + Docker
-      // Double escape: once for local shell, once for remote shell
-      const escapedCode = code
-        .replace(/\\/g, '\\\\\\\\')     // Backslash
-        .replace(/'/g, "'\"'\"'")       // Single quotes
-        .replace(/"/g, '\\"')           // Double quotes
-        .replace(/\$/g, '\\$')          // Dollar sign
-        .replace(/`/g, '\\`')           // Backticks
-        .replace(/!/g, '\\!');          // Exclamation mark
-
       // Build the Docker command to run on remote server
       const dockerCommand = [
         'docker', 'run',
@@ -223,7 +212,7 @@ class DockerExecutionService extends EventEmitter {
         '-w', '/tmp/code',                // Working directory
         this.getDockerImage(language),
         '/bin/sh', '-c',
-        `"${this.buildExecutionScript(config, escapedCode)}"`
+        this.quoteRemoteArgument(this.buildExecutionScript(config, code))
       ].join(' ');
 
       // Build SSH command
@@ -323,11 +312,16 @@ class DockerExecutionService extends EventEmitter {
   /**
    * Build the execution script for the container
    */
-  buildExecutionScript(config, escapedCode) {
+  quoteRemoteArgument(value) {
+    return "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  }
+
+  buildExecutionScript(config, code) {
+    const encodedCode = Buffer.from(code, 'utf8').toString('base64');
     const fileName = config.fileName;
     const fileNoExt = fileName.replace(/\.[^/.]+$/, '');
     
-    let script = `mkdir -p /tmp/code && cd /tmp/code && echo '${escapedCode}' > ${fileName}`;
+    let script = `mkdir -p /tmp/code && cd /tmp/code && printf '%s' '${encodedCode}' | base64 -d > ${fileName}`;
     
     // Add compile step if needed
     if (config.compile) {
@@ -420,8 +414,7 @@ class DockerExecutionService extends EventEmitter {
     // Force remove container on remote server via SSH
     try {
       const sshArgs = [
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'UserKnownHostsFile=/dev/null',
+        '-o', 'StrictHostKeyChecking=yes',
         '-o', 'LogLevel=ERROR',
         '-o', 'ConnectTimeout=5',
         '-p', this.pistonSshPort,

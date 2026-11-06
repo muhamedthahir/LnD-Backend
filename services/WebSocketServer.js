@@ -3,6 +3,8 @@
 
 const { WebSocketServer } = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const { verifyAccessToken } = require('../utils/jwt');
+const User = require('../models/User');
 const DockerExecutionService = require('./DockerExecutionService');
 
 class CodeExecutionWebSocketServer {
@@ -16,10 +18,12 @@ class CodeExecutionWebSocketServer {
    * Initialize WebSocket server
    * @param {http.Server} server - HTTP server instance
    */
-  initialize(server) {
+  initialize(server, isOriginAllowed) {
     this.wss = new WebSocketServer({ 
       server,
-      path: '/ws/code-execute'
+      path: '/ws/code-execute',
+      maxPayload: 256 * 1024,
+      verifyClient: ({ origin }) => !origin || Boolean(isOriginAllowed(origin))
     });
 
     console.log('[WebSocket] Server initialized on path /ws/code-execute');
@@ -41,7 +45,15 @@ class CodeExecutionWebSocketServer {
    * Handle new WebSocket connection
    */
   handleConnection(ws, req) {
+    if (this.sessions.size >= 100) {
+      ws.close(1013, 'Execution capacity reached');
+      return;
+    }
     const sessionId = uuidv4();
+    ws.authDeadline = setTimeout(() => {
+      if (!ws.userId) ws.close(1008, 'Authentication required');
+    }, 5000);
+    ws.authDeadline.unref();
     this.sessions.set(ws, sessionId);
     this.connections.set(sessionId, ws);
 
@@ -82,6 +94,27 @@ class CodeExecutionWebSocketServer {
   async handleMessage(ws, sessionId, data) {
     try {
       const message = JSON.parse(data.toString());
+      if (!ws.userId) {
+        if (ws.authenticating) return;
+        ws.authenticating = true;
+        const identity = message.type === 'execute' && typeof message.accessToken === 'string'
+          ? verifyAccessToken(message.accessToken) : null;
+        const user = identity?.id && await User.findById(identity.id);
+        if (!user || ws.readyState !== ws.OPEN) {
+          ws.close(1008, 'Authentication required');
+          return;
+        }
+        if ([...this.sessions.keys()].some(other => other !== ws && other.userId === user.id)) {
+          ws.close(1013, 'An execution session is already open');
+          return;
+        }
+        ws.userId = user.id;
+        clearTimeout(ws.authDeadline);
+      }
+      if (message.type === 'execute') {
+        if (ws.executionStarted) return;
+        ws.executionStarted = true;
+      }
       
       console.log(`[WebSocket] Message from ${sessionId}:`, message.type);
 
@@ -226,6 +259,7 @@ class CodeExecutionWebSocketServer {
    * Handle disconnection
    */
   async handleDisconnect(ws, sessionId) {
+    clearTimeout(ws.authDeadline);
     console.log(`[WebSocket] Disconnection: ${sessionId}`);
     
     // Kill any running containers for this session

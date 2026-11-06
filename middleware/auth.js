@@ -9,12 +9,6 @@ const authenticate = async (req, res, next) => {
     const token = extractToken(req);
     
     if (!token) {
-      // Ensure CORS headers are set before sending error response
-      const origin = req.headers.origin;
-      if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-      }
       return res.status(401).json({ 
         error: 'Authentication required',
         message: 'No token provided. Please log in to access this resource',
@@ -26,12 +20,6 @@ const authenticate = async (req, res, next) => {
     const decoded = verifyAccessToken(token);
     
     if (!decoded) {
-      // Ensure CORS headers are set before sending error response
-      const origin = req.headers.origin;
-      if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-      }
       return res.status(401).json({ 
         error: 'Invalid token',
         message: 'Token is invalid or expired. Please log in again',
@@ -43,12 +31,6 @@ const authenticate = async (req, res, next) => {
     const user = await User.findById(decoded.id);
     
     if (!user) {
-      // Ensure CORS headers are set before sending error response
-      const origin = req.headers.origin;
-      if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-      }
       return res.status(401).json({ 
         error: 'User not found',
         message: 'User associated with token no longer exists',
@@ -81,12 +63,6 @@ const authenticate = async (req, res, next) => {
 const createAuthorizer = (allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
-      // Ensure CORS headers are set before sending error response
-      const origin = req.headers.origin;
-      if (origin && (origin.includes('cloudfront.net') || origin.includes('localhost'))) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-      }
       return res.status(401).json({ error: 'Authentication required' });
     }
 
